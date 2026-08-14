@@ -3,9 +3,11 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	_ "github.com/lib/pq"
 	"github.com/gorilla/mux"
@@ -27,6 +29,20 @@ type CommonEvent struct {
 	RawPayload interface{}      `json:"raw_payload,omitempty"`
 }
 
+// Executor defines the database operations we need.
+type Executor interface {
+	Exec(query string, args ...interface{}) (sql.Result, error)
+}
+
+// dbExecutor wraps *sql.DB to satisfy Executor.
+type dbExecutor struct {
+	*sql.DB
+}
+
+func (d *dbExecutor) Exec(query string, args ...interface{}) (sql.Result, error) {
+	return d.DB.Exec(query, args...)
+}
+
 func main() {
 	// Get database connection string from environment
 	dbURL := os.Getenv("DATABASE_URL")
@@ -44,9 +60,14 @@ func main() {
 		log.Fatalf("Error connecting to database: %v", err)
 	}
 
+	// Set connection pool settings
+	db.SetMaxOpenConns(25)
+	db.SetMaxIdleConns(25)
+	db.SetConnMaxLifetime(5 * time.Minute)
+
 	r := mux.NewRouter()
-	r.HandleFunc("/webhook/grafana", grafanaWebhookHandler(db)).Methods("POST")
-	r.HandleFunc("/webhook/generic", genericWebhookHandler(db)).Methods("POST")
+	r.HandleFunc("/webhook/grafana", grafanaWebhookHandler(&dbExecutor{db})).Methods("POST")
+	r.HandleFunc("/webhook/generic", genericWebhookHandler(&dbExecutor{db})).Methods("POST")
 	r.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok"))
@@ -61,23 +82,67 @@ func main() {
 }
 
 // grafanaWebhookHandler processes Grafana alert webhook payload.
-func grafanaWebhookHandler(db *sql.DB) http.HandlerFunc {
+func grafanaWebhookHandler(db Executor) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var payload map[string]interface{}
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			log.Printf("Invalid JSON in grafana webhook: %v", err)
 			http.Error(w, "Invalid JSON", http.StatusBadRequest)
 			return
 		}
 
-		// Extract relevant fields from Grafana webhook
-		// This is a simplified example; adjust based on actual Grafana webhook format
+		// Extract relevant fields from Grafana webhook with validation
 		eventID := uuid.NewString()
 		source := "grafana"
 		eventType := "alert"
-		timestamp := payload["evalMatches"].([]interface{})[0].(map[string]interface{})["time"].(string) // placeholder
-		service := payload["tags"].(map[string]interface{})["service"].(string) // placeholder
-		title := payload["ruleName"].(string)
-		severity := payload["evalMatches"].([]interface{})[0].(map[string]interface{})["value"].(string) // placeholder
+
+		// timestamp: prefer evalMatches[0].time, then fallback to root timestamp?
+		var timestamp string
+		if evalMatches, ok := payload["evalMatches"].([]interface{}); ok && len(evalMatches) > 0 {
+			if firstMatch, ok := evalMatches[0].(map[string]interface{}); ok {
+				if t, ok := firstMatch["time"].(string); ok {
+					timestamp = t
+				}
+			}
+		}
+		if timestamp == "" {
+			// fallback to root timestamp if exists
+			if t, ok := payload["timestamp"].(string); ok {
+				timestamp = t
+			}
+		}
+		if timestamp == "" {
+			log.Printf("Missing timestamp in grafana webhook payload")
+			http.Error(w, "Missing timestamp", http.StatusBadRequest)
+			return
+		}
+
+		// service from tags.service
+		var service string
+		if tags, ok := payload["tags"].(map[string]interface{}); ok {
+			if s, ok := tags["service"].(string); ok {
+				service = s
+			}
+		}
+		if service == "" {
+			log.Printf("Missing service in grafana webhook payload tags")
+			http.Error(w, "Missing service", http.StatusBadRequest)
+			return
+		}
+
+		// title from ruleName
+		var title string
+		if t, ok := payload["ruleName"].(string); ok {
+			title = t
+		}
+		if title == "" {
+			log.Printf("Missing ruleName in grafana webhook payload")
+			http.Error(w, "Missing ruleName", http.StatusBadRequest)
+			return
+		}
+
+		// severity: we'll use a default or try to extract from value? Keep as empty for now.
+		var severity string
 
 		event := CommonEvent{
 			ID:        eventID,
@@ -90,10 +155,19 @@ func grafanaWebhookHandler(db *sql.DB) http.HandlerFunc {
 			Labels:    make(map[string]string),
 			RawPayload: payload,
 		}
+		// Copy labels from tags if present
+		if tags, ok := payload["tags"].(map[string]interface{}); ok {
+			for k, v := range tags {
+				if str, ok := v.(string); ok {
+					event.Labels[k] = str
+				}
+			}
+		}
 
 		// Insert into events table
 		_, err := db.Exec(
-			"INSERT INTO events (id, source, type, timestamp, service, environment, severity, title, status, labels, raw_payload) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
+			`INSERT INTO events (id, source, type, timestamp, service, environment, severity, title, status, labels, raw_payload) 
+			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
 			event.ID, event.Source, event.Type, event.Timestamp, event.Service, "", event.Severity, event.Title, "firing", event.Labels, event.RawPayload,
 		)
 		if err != nil {
@@ -108,10 +182,11 @@ func grafanaWebhookHandler(db *sql.DB) http.HandlerFunc {
 }
 
 // genericWebhookHandler processes a generic JSON webhook and normalizes it.
-func genericWebhookHandler(db *sql.DB) http.HandlerFunc {
+func genericWebhookHandler(db Executor) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var payload map[string]interface{}
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			log.Printf("Invalid JSON in generic webhook: %v", err)
 			http.Error(w, "Invalid JSON", http.StatusBadRequest)
 			return
 		}
@@ -119,8 +194,28 @@ func genericWebhookHandler(db *sql.DB) http.HandlerFunc {
 		eventID := uuid.NewString()
 		source := "generic"
 		eventType := "event"
-		timestamp := payload["timestamp"].(string) // assume timestamp field exists
-		service := payload["service"].(string)    // assume service field exists
+
+		// timestamp from payload.timestamp
+		var timestamp string
+		if t, ok := payload["timestamp"].(string); ok {
+			timestamp = t
+		}
+		if timestamp == "" {
+			log.Printf("Missing timestamp in generic webhook payload")
+			http.Error(w, "Missing timestamp", http.StatusBadRequest)
+			return
+		}
+
+		// service from payload.service
+		var service string
+		if s, ok := payload["service"].(string); ok {
+			service = s
+		}
+		if service == "" {
+			log.Printf("Missing service in generic webhook payload")
+			http.Error(w, "Missing service", http.StatusBadRequest)
+			return
+		}
 
 		event := CommonEvent{
 			ID:        eventID,
@@ -133,7 +228,8 @@ func genericWebhookHandler(db *sql.DB) http.HandlerFunc {
 		}
 
 		_, err := db.Exec(
-			"INSERT INTO events (id, source, type, timestamp, service, environment, severity, title, status, labels, raw_payload) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
+			`INSERT INTO events (id, source, type, timestamp, service, environment, severity, title, status, labels, raw_payload) 
+			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
 			event.ID, event.Source, event.Type, event.Timestamp, event.Service, "", "", "", "firing", event.Labels, event.RawPayload,
 		)
 		if err != nil {
