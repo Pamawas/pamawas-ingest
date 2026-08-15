@@ -144,7 +144,7 @@ func (h *Handler) GrafanaWebhook(w http.ResponseWriter, r *http.Request) {
 		Msg("Grafana webhook processed successfully")
 
 	w.WriteHeader(http.StatusAccepted)
-	json.NewEncoder(w).Encode(models.WebhookResponse{Status: "accepted", EventID: event.ID})
+	_ = json.NewEncoder(w).Encode(models.WebhookResponse{Status: "accepted", EventID: event.ID})
 }
 
 // GenericWebhook processes a generic JSON webhook and normalizes it
@@ -245,7 +245,7 @@ func (h *Handler) GenericWebhook(w http.ResponseWriter, r *http.Request) {
 		Msg("Generic webhook processed successfully")
 
 	w.WriteHeader(http.StatusAccepted)
-	json.NewEncoder(w).Encode(models.WebhookResponse{Status: "accepted", EventID: event.ID})
+	_ = json.NewEncoder(w).Encode(models.WebhookResponse{Status: "accepted", EventID: event.ID})
 }
 
 // HealthHandler handles health check requests
@@ -257,7 +257,7 @@ func (h *Handler) HealthHandler(w http.ResponseWriter, r *http.Request) {
 		h.metrics.DBConnectionErrors.Inc()
 		log.Error().Err(err).Msg("Health check failed: database connection")
 		w.WriteHeader(http.StatusServiceUnavailable)
-		json.NewEncoder(w).Encode(models.HealthResponse{
+		_ = json.NewEncoder(w).Encode(models.HealthResponse{
 			Status: "unhealthy",
 			Error:  "database connection failed",
 		})
@@ -266,7 +266,7 @@ func (h *Handler) HealthHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(models.HealthResponse{
+	_ = json.NewEncoder(w).Encode(models.HealthResponse{
 		Status:    "healthy",
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 	})
@@ -280,7 +280,7 @@ func (h *Handler) ReadyHandler(w http.ResponseWriter, r *http.Request) {
 	if err := h.db.PingContext(ctx); err != nil {
 		log.Error().Err(err).Msg("Readiness check failed: database not ready")
 		w.WriteHeader(http.StatusServiceUnavailable)
-		json.NewEncoder(w).Encode(models.ReadyResponse{
+		_ = json.NewEncoder(w).Encode(models.ReadyResponse{
 			Status: "not ready",
 			Error:  "database not ready",
 		})
@@ -289,7 +289,7 @@ func (h *Handler) ReadyHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(models.ReadyResponse{Status: "ready"})
+	_ = json.NewEncoder(w).Encode(models.ReadyResponse{Status: "ready"})
 }
 
 // MetricsHandler returns the Prometheus metrics handler
