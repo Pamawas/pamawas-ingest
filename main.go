@@ -1,62 +1,56 @@
 package main
 
 import (
+	"context"
 	"database/sql"
-	"encoding/json"
-	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	_ "github.com/lib/pq"
 	"github.com/gorilla/mux"
-	"github.com/google/uuid"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
+
+	"github.com/Pamawas/pamawas-ingest/config"
+	"github.com/Pamawas/pamawas-ingest/handlers"
+	"github.com/Pamawas/pamawas-ingest/metrics"
+	"github.com/Pamawas/pamawas-ingest/middleware"
 )
 
-// CommonEvent represents the normalized event schema.
-type CommonEvent struct {
-	ID        string            `json:"id"`
-	Source    string            `json:"source"`
-	Type      string            `json:"type"`
-	Timestamp string            `json:"timestamp"` // ISO8601 string
-	Service   string            `json:"service,omitempty"`
-	Environment string        `json:"environment,omitempty"`
-	Severity  string            `json:"severity,omitempty"`
-	Title     string            `json:"title,omitempty"`
-	Status    string            `json:"status,omitempty"`
-	Labels    map[string]string `json:"labels,omitempty"`
-	RawPayload interface{}      `json:"raw_payload,omitempty"`
-}
-
-// Executor defines the database operations we need.
-type Executor interface {
-	Exec(query string, args ...interface{}) (sql.Result, error)
-}
-
-// dbExecutor wraps *sql.DB to satisfy Executor.
-type dbExecutor struct {
-	*sql.DB
-}
-
-func (d *dbExecutor) Exec(query string, args ...interface{}) (sql.Result, error) {
-	return d.DB.Exec(query, args...)
-}
-
 func main() {
-	// Get database connection string from environment
-	dbURL := os.Getenv("DATABASE_URL")
-	if dbURL == "" {
-		log.Fatal("DATABASE_URL environment variable not set")
-	}
-	db, err := sql.Open("postgres", dbURL)
+	cfg := config.Load()
+	initLogger(cfg)
+
+	log.Info().
+		Str("port", cfg.Port).
+		Str("environment", cfg.Environment).
+		Str("log_level", cfg.LogLevel).
+		Msg("Starting pamawas-ingest")
+
+	// Connect to database with retries
+	db, err := sql.Open("postgres", cfg.DatabaseURL)
 	if err != nil {
-		log.Fatalf("Error opening database: %v", err)
+		log.Fatal().Err(err).Msg("Error opening database")
 	}
 	defer db.Close()
 
-	// Test connection
-	if err = db.Ping(); err != nil {
-		log.Fatalf("Error connecting to database: %v", err)
+	// Test connection with retries
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	for i := 0; i < 30; i++ {
+		if err := db.PingContext(ctx); err == nil {
+			break
+		}
+		log.Printf("Waiting for database... (%d/30)", i+1)
+		time.Sleep(1 * time.Second)
+	}
+
+	if err := db.PingContext(ctx); err != nil {
+		log.Fatal().Err(err).Msg("Failed to connect to database after retries")
 	}
 
 	// Set connection pool settings
@@ -64,180 +58,68 @@ func main() {
 	db.SetMaxIdleConns(25)
 	db.SetConnMaxLifetime(5 * time.Minute)
 
+	log.Info().Msg("Connected to database")
+
+	// Initialize metrics
+	m := metrics.NewMetrics()
+
+	// Initialize handlers
+	h := handlers.NewHandler(db, cfg, m)
+
+	// Create router with middleware
 	r := mux.NewRouter()
-	r.HandleFunc("/webhook/grafana", grafanaWebhookHandler(&dbExecutor{db})).Methods("POST")
-	r.HandleFunc("/webhook/generic", genericWebhookHandler(&dbExecutor{db})).Methods("POST")
-	r.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
-	}).Methods("GET")
+	r.Use(middleware.LoggingMiddleware)
 
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
+	// Webhook endpoints
+	r.HandleFunc("/webhook/grafana", h.GrafanaWebhook).Methods("POST")
+	r.HandleFunc("/webhook/generic", h.GenericWebhook).Methods("POST")
+
+	// Health and metrics
+	r.HandleFunc("/healthz", h.HealthHandler).Methods("GET")
+	r.HandleFunc("/ready", h.ReadyHandler).Methods("GET")
+	r.Handle("/metrics", h.MetricsHandler())
+
+	// Create server
+	srv := &http.Server{
+		Addr:         ":" + cfg.Port,
+		Handler:      r,
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 15 * time.Second,
+		IdleTimeout:  60 * time.Second,
 	}
-	log.Printf("Starting server on :%s", port)
-	log.Fatal(http.ListenAndServe(":"+port, r))
+
+	// Graceful shutdown
+	go func() {
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		<-sigCh
+
+		log.Info().Msg("Shutdown signal received, stopping server...")
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(ctx); err != nil {
+			log.Error().Err(err).Msg("Server forced to shutdown")
+		}
+	}()
+
+	log.Info().Str("port", cfg.Port).Msg("Starting server")
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Fatal().Err(err).Msg("Server failed")
+	}
+
+	log.Info().Msg("Server stopped gracefully")
 }
 
-// grafanaWebhookHandler processes Grafana alert webhook payload.
-func grafanaWebhookHandler(db Executor) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		var payload map[string]interface{}
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			log.Printf("Invalid JSON in grafana webhook: %v", err)
-			http.Error(w, "Invalid JSON", http.StatusBadRequest)
-			return
-		}
-
-		// Extract relevant fields from Grafana webhook with validation
-		eventID := uuid.NewString()
-		source := "grafana"
-		eventType := "alert"
-
-		// timestamp: prefer evalMatches[0].time, then fallback to root timestamp?
-		var timestamp string
-		if evalMatches, ok := payload["evalMatches"].([]interface{}); ok && len(evalMatches) > 0 {
-			if firstMatch, ok := evalMatches[0].(map[string]interface{}); ok {
-				if t, ok := firstMatch["time"].(string); ok {
-					timestamp = t
-				}
-			}
-		}
-		if timestamp == "" {
-			// fallback to root timestamp if exists
-			if t, ok := payload["timestamp"].(string); ok {
-				timestamp = t
-			}
-		}
-		if timestamp == "" {
-			log.Printf("Missing timestamp in grafana webhook payload")
-			http.Error(w, "Missing timestamp", http.StatusBadRequest)
-			return
-		}
-
-		// service from tags.service
-		var service string
-		if tags, ok := payload["tags"].(map[string]interface{}); ok {
-			if s, ok := tags["service"].(string); ok {
-				service = s
-			}
-		}
-		if service == "" {
-			log.Printf("Missing service in grafana webhook payload tags")
-			http.Error(w, "Missing service", http.StatusBadRequest)
-			return
-		}
-
-		// title from ruleName
-		var title string
-		if t, ok := payload["ruleName"].(string); ok {
-			title = t
-		}
-		if title == "" {
-			log.Printf("Missing ruleName in grafana webhook payload")
-			http.Error(w, "Missing ruleName", http.StatusBadRequest)
-			return
-		}
-
-		// severity: we'll use a default or try to extract from value? Keep as empty for now.
-		var severity string
-
-		event := CommonEvent{
-			ID:        eventID,
-			Source:    source,
-			Type:      eventType,
-			Timestamp: timestamp,
-			Service:   service,
-			Title:     title,
-			Severity:  severity,
-			Labels:    make(map[string]string),
-			RawPayload: payload,
-		}
-		// Copy labels from tags if present
-		if tags, ok := payload["tags"].(map[string]interface{}); ok {
-			for k, v := range tags {
-				if str, ok := v.(string); ok {
-					event.Labels[k] = str
-				}
-			}
-		}
-
-		// Insert into events table
-		_, err := db.Exec(
-			`INSERT INTO events (id, source, type, timestamp, service, environment, severity, title, status, labels, raw_payload) 
-			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-			event.ID, event.Source, event.Type, event.Timestamp, event.Service, "", event.Severity, event.Title, "firing", event.Labels, event.RawPayload,
-		)
-		if err != nil {
-			log.Printf("Error inserting event: %v", err)
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
-			return
-		}
-
-		w.WriteHeader(http.StatusAccepted)
-		json.NewEncoder(w).Encode(map[string]string{"status": "accepted", "event_id": event.ID})
+func initLogger(cfg config.Config) {
+	level, err := zerolog.ParseLevel(cfg.LogLevel)
+	if err != nil {
+		level = zerolog.InfoLevel
 	}
-}
+	zerolog.SetGlobalLevel(level)
 
-// genericWebhookHandler processes a generic JSON webhook and normalizes it.
-func genericWebhookHandler(db Executor) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		var payload map[string]interface{}
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			log.Printf("Invalid JSON in generic webhook: %v", err)
-			http.Error(w, "Invalid JSON", http.StatusBadRequest)
-			return
-		}
-
-		eventID := uuid.NewString()
-		source := "generic"
-		eventType := "event"
-
-		// timestamp from payload.timestamp
-		var timestamp string
-		if t, ok := payload["timestamp"].(string); ok {
-			timestamp = t
-		}
-		if timestamp == "" {
-			log.Printf("Missing timestamp in generic webhook payload")
-			http.Error(w, "Missing timestamp", http.StatusBadRequest)
-			return
-		}
-
-		// service from payload.service
-		var service string
-		if s, ok := payload["service"].(string); ok {
-			service = s
-		}
-		if service == "" {
-			log.Printf("Missing service in generic webhook payload")
-			http.Error(w, "Missing service", http.StatusBadRequest)
-			return
-		}
-
-		event := CommonEvent{
-			ID:        eventID,
-			Source:    source,
-			Type:      eventType,
-			Timestamp: timestamp,
-			Service:   service,
-			Labels:    make(map[string]string),
-			RawPayload: payload,
-		}
-
-		_, err := db.Exec(
-			`INSERT INTO events (id, source, type, timestamp, service, environment, severity, title, status, labels, raw_payload) 
-			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-			event.ID, event.Source, event.Type, event.Timestamp, event.Service, "", "", "", "firing", event.Labels, event.RawPayload,
-		)
-		if err != nil {
-			log.Printf("Error inserting event: %v", err)
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
-			return
-		}
-
-		w.WriteHeader(http.StatusAccepted)
-		json.NewEncoder(w).Encode(map[string]string{"status": "accepted", "event_id": event.ID})
+	if cfg.Environment == "development" {
+		log.Logger = zerolog.New(os.Stderr).With().Timestamp().Logger().Output(zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339})
+	} else {
+		log.Logger = zerolog.New(os.Stderr).With().Timestamp().Logger()
 	}
 }
