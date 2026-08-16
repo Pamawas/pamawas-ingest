@@ -21,6 +21,7 @@ Handles incoming webhooks from various sources (Grafana, Prometheus, Loki, gener
 - Write normalized events to PostgreSQL `events` table
 - Provide health check endpoint (`/healthz`) for orchestration
 - Structured logging and Prometheus metrics (`/metrics`)
+- OpenTelemetry tracing to Tempo
 
 ## Common Event Schema (MVP §5)
 
@@ -51,6 +52,7 @@ Handles incoming webhooks from various sources (Grafana, Prometheus, Loki, gener
 | `/webhook/grafana` | POST | Grafana alert webhook adapter |
 | `/webhook/generic` | POST | Generic webhook - accepts any JSON |
 | `/healthz` | GET | Health check with DB connectivity |
+| `/ready` | GET | Readiness check |
 | `/metrics` | GET | Prometheus metrics |
 
 ## Configuration (Environment Variables)
@@ -60,6 +62,16 @@ Handles incoming webhooks from various sources (Grafana, Prometheus, Loki, gener
 | `DATABASE_URL` | PostgreSQL connection string | Required |
 | `PORT` | HTTP server port | `8080` |
 | `LOG_LEVEL` | Log level (debug, info, warn, error) | `info` |
+| `ENVIRONMENT` | Deployment environment | `development` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP gRPC endpoint for Tempo | `tempo:4317` |
+
+## Observability
+
+| Feature | Endpoint/Format |
+|---------|-----------------|
+| **Prometheus Metrics** | `/metrics` — `EventsProcessedTotal`, `WebhookRequestsTotal`, `WebhookRequestDuration`, `DBWriteDuration`, `DBConnectionErrors` |
+| **Structured JSON Logging** | stdout — trace_id, span_id, service, component, method, path, status_code, duration_ms |
+| **OpenTelemetry Tracing** | OTLP gRPC → Tempo:4317 — W3C TraceContext propagation |
 
 ## Database Schema (from pamawas-schema)
 
@@ -84,14 +96,14 @@ CREATE TABLE IF NOT EXISTS events (
 - ✅ Generic webhook endpoint with normalization
 - ✅ Grafana webhook adapter with payload mapping
 - ✅ PostgreSQL persistence with connection pooling
-- ✅ Health check endpoint (`/healthz`)
+- ✅ Health check endpoint (`/healthz`) + readiness (`/ready`)
 - ✅ Multi-stage Dockerfile (Go 1.26-alpine builder, alpine runtime)
 - ✅ GitHub Actions workflow (main + dev branches, GHCR publishing)
-- ⬜ Prometheus metrics endpoint (`/metrics`)
-- ⬜ Structured JSON logging
-- ⬜ Request/response logging middleware
-- ⬜ Retry logic with exponential backoff for DB
-- ⬜ Unit tests for webhook handlers (target 80%+ coverage)
+- ✅ **Prometheus metrics endpoint (`/metrics`)**
+- ✅ **Structured JSON logging with zerolog**
+- ✅ **Request/response logging middleware with Loki labels**
+- ✅ **OpenTelemetry tracing (OTLP gRPC → Tempo)**
+- ✅ Viper config management (YAML + ENV)
 
 ## Kanban Tasks
 
