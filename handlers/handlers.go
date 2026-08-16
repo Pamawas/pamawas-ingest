@@ -144,7 +144,9 @@ func (h *Handler) GrafanaWebhook(w http.ResponseWriter, r *http.Request) {
 		Msg("Grafana webhook processed successfully")
 
 	w.WriteHeader(http.StatusAccepted)
-	_ = json.NewEncoder(w).Encode(models.WebhookResponse{Status: "accepted", EventID: event.ID})
+	if err := json.NewEncoder(w).Encode(models.WebhookResponse{Status: "accepted", EventID: event.ID}); err != nil {
+		log.Error().Err(err).Msg("Failed to encode webhook response")
+	}
 }
 
 // GenericWebhook processes a generic JSON webhook and normalizes it
@@ -245,7 +247,9 @@ func (h *Handler) GenericWebhook(w http.ResponseWriter, r *http.Request) {
 		Msg("Generic webhook processed successfully")
 
 	w.WriteHeader(http.StatusAccepted)
-	_ = json.NewEncoder(w).Encode(models.WebhookResponse{Status: "accepted", EventID: event.ID})
+	if err := json.NewEncoder(w).Encode(models.WebhookResponse{Status: "accepted", EventID: event.ID}); err != nil {
+		log.Error().Err(err).Msg("Failed to encode webhook response")
+	}
 }
 
 // HealthHandler handles health check requests
@@ -257,19 +261,23 @@ func (h *Handler) HealthHandler(w http.ResponseWriter, r *http.Request) {
 		h.metrics.DBConnectionErrors.Inc()
 		log.Error().Err(err).Msg("Health check failed: database connection")
 		w.WriteHeader(http.StatusServiceUnavailable)
-		_ = json.NewEncoder(w).Encode(models.HealthResponse{
+		if err := json.NewEncoder(w).Encode(models.HealthResponse{
 			Status: "unhealthy",
 			Error:  "database connection failed",
-		})
+		}); err != nil {
+			log.Error().Err(err).Msg("Failed to encode health response")
+		}
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(models.HealthResponse{
+	if err := json.NewEncoder(w).Encode(models.HealthResponse{
 		Status:    "healthy",
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
-	})
+	}); err != nil {
+		log.Error().Err(err).Msg("Failed to encode health response")
+	}
 }
 
 // ReadyHandler handles readiness check requests
@@ -280,16 +288,20 @@ func (h *Handler) ReadyHandler(w http.ResponseWriter, r *http.Request) {
 	if err := h.db.PingContext(ctx); err != nil {
 		log.Error().Err(err).Msg("Readiness check failed: database not ready")
 		w.WriteHeader(http.StatusServiceUnavailable)
-		_ = json.NewEncoder(w).Encode(models.ReadyResponse{
+		if err := json.NewEncoder(w).Encode(models.ReadyResponse{
 			Status: "not ready",
 			Error:  "database not ready",
-		})
+		}); err != nil {
+			log.Error().Err(err).Msg("Failed to encode ready response")
+		}
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(models.ReadyResponse{Status: "ready"})
+	if err := json.NewEncoder(w).Encode(models.ReadyResponse{Status: "ready"}); err != nil {
+		log.Error().Err(err).Msg("Failed to encode ready response")
+	}
 }
 
 // MetricsHandler returns the Prometheus metrics handler
