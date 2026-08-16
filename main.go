@@ -18,11 +18,29 @@ import (
 	"github.com/Pamawas/pamawas-ingest/handlers"
 	"github.com/Pamawas/pamawas-ingest/metrics"
 	"github.com/Pamawas/pamawas-ingest/middleware"
+	"github.com/Pamawas/pamawas-ingest/otel"
 )
 
 func main() {
 	cfg := config.Load()
 	initLogger(cfg)
+
+	// Initialize OpenTelemetry tracing
+	otelShutdown, err := otel.InitTracer(otel.Config{
+		ServiceName:  "pamawas-ingest",
+		OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
+		Insecure:     true,
+		SampleRatio:  1.0,
+		Enabled:      os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT") != "",
+	})
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to initialize OpenTelemetry")
+	}
+	defer func() {
+		if err := otelShutdown(context.Background()); err != nil {
+			log.Error().Err(err).Msg("Error shutting down OpenTelemetry")
+		}
+	}()
 
 	log.Info().
 		Str("port", cfg.Port).
@@ -72,7 +90,8 @@ func main() {
 
 	// Create router with middleware
 	r := mux.NewRouter()
-	r.Use(middleware.LoggingMiddleware)
+	r.Use(middleware.LoggingMiddleware("pamawas-ingest"))
+	r.Use(middleware.ErrorLoggingMiddleware("pamawas-ingest"))
 
 	// Webhook endpoints
 	r.HandleFunc("/webhook/grafana", h.GrafanaWebhook).Methods("POST")
