@@ -42,6 +42,7 @@ jobs:
       with:
         repository: Pamawas/pamawas-schema
         path: pamawas-schema
+        ref: dev
         token: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Wait for PostgreSQL
