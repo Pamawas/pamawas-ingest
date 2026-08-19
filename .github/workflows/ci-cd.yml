@@ -53,9 +53,15 @@ jobs:
 
     - name: Run migrations
       run: |
+        echo "=== Listing migration files ==="
+        ls -la pamawas-schema/migrations/
+        echo "=== Running migrations ==="
         for f in pamawas-schema/migrations/*.sql; do
+          echo "Running $f"
           psql "postgres://pamawas:pamawas@localhost:5432/pamawas_test?sslmode=disable" -f "$f"
         done
+        echo "=== Verifying tables ==="
+        psql "postgres://pamawas:pamawas@localhost:5432/pamawas_test?sslmode=disable" -c "\dt"
 
     - name: Run unit tests
       run: go test -v -race -coverprofile=coverage.out ./...
