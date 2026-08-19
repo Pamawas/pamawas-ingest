@@ -79,7 +79,10 @@ func CheckIdempotency(db *sql.DB, audience, caller, idempotencyKey string, req *
 		VALUES ($1, $2, $3, $4, $5, $6, now(), now() + interval '24 hours')
 		ON CONFLICT (audience, caller, key_hash) DO UPDATE SET
 			request_hash = EXCLUDED.request_hash,
-			result_reference = EXCLUDED.result_reference,
+			result_reference = CASE 
+				WHEN EXCLUDED.result_reference != '' THEN EXCLUDED.result_reference
+				ELSE idempotency_records.result_reference
+			END,
 			expires_at = EXCLUDED.expires_at
 		RETURNING request_hash, status, result_reference
 	`, audience, caller, keyHash, requestHash, IdempotencyStatusProcessing, "").Scan(&existingRequestHash, &existingStatus, &existingResultRef)

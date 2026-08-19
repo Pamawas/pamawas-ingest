@@ -13,6 +13,7 @@ import (
 	_ "github.com/lib/pq"
 
 	"github.com/gorilla/mux"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -70,7 +71,9 @@ func newTestHandler(t *testing.T, db *sql.DB) *TestHandler {
 		TestMode:     true,
 	}
 
-	m := metrics.NewMetrics()
+	// Use a custom registry for tests to avoid duplicate metrics registration
+	reg := prometheus.NewRegistry()
+	m := metrics.NewMetricsWithRegistry(reg)
 	h := handlers.NewHandler(db, cfg, m)
 
 	// Create router same as main.go

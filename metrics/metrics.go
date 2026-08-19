@@ -14,17 +14,27 @@ type Metrics struct {
 	DBConnectionErrors      prometheus.Counter
 }
 
-// NewMetrics creates and registers all metrics
+// NewMetrics creates and registers all metrics with default registry
 func NewMetrics() *Metrics {
+	return newMetrics(prometheus.DefaultRegisterer)
+}
+
+// NewMetricsWithRegistry creates and registers all metrics with a custom registry
+func NewMetricsWithRegistry(reg prometheus.Registerer) *Metrics {
+	return newMetrics(reg)
+}
+
+func newMetrics(reg prometheus.Registerer) *Metrics {
+	factory := promauto.With(reg)
 	return &Metrics{
-		WebhookRequestsTotal: promauto.NewCounterVec(
+		WebhookRequestsTotal: factory.NewCounterVec(
 			prometheus.CounterOpts{
 				Name: "ingest_webhook_requests_total",
 				Help: "Total number of webhook requests received",
 			},
 			[]string{"endpoint", "status"},
 		),
-		WebhookRequestDuration: promauto.NewHistogramVec(
+		WebhookRequestDuration: factory.NewHistogramVec(
 			prometheus.HistogramOpts{
 				Name:    "ingest_webhook_request_duration_seconds",
 				Help:    "Webhook request duration in seconds",
@@ -32,20 +42,20 @@ func NewMetrics() *Metrics {
 			},
 			[]string{"endpoint"},
 		),
-		DBWriteDuration: promauto.NewHistogram(
+		DBWriteDuration: factory.NewHistogram(
 			prometheus.HistogramOpts{
 				Name:    "ingest_db_write_duration_seconds",
 				Help:    "Database write duration in seconds",
 				Buckets: prometheus.DefBuckets,
 			},
 		),
-		EventsProcessedTotal: promauto.NewCounter(
+		EventsProcessedTotal: factory.NewCounter(
 			prometheus.CounterOpts{
 				Name: "ingest_events_processed_total",
 				Help: "Total number of events successfully processed",
 			},
 		),
-		DBConnectionErrors: promauto.NewCounter(
+		DBConnectionErrors: factory.NewCounter(
 			prometheus.CounterOpts{
 				Name: "ingest_db_connection_errors_total",
 				Help: "Total number of database connection errors",
