@@ -90,7 +90,6 @@ func CheckIdempotency(db *sql.DB, audience, caller, idempotencyKey string, req *
 	if err != nil {
 		// Check if it's a unique constraint violation on different hash (conflict)
 		if err == sql.ErrNoRows {
-			// This shouldn't happen with ON CONFLICT, but handle it
 			return "", false, false, err
 		}
 		// Check if we got a conflict due to different request hash
@@ -122,24 +121,7 @@ func CheckIdempotency(db *sql.DB, audience, caller, idempotencyKey string, req *
 		return "", false, false, err
 	}
 
-	// Check if existing record is expired
-	if time.Now().After(existingExpiresAt) {
-		// Expired - delete and treat as new
-		tx.ExecContext(ctx, `DELETE FROM idempotency_records WHERE audience = $1 AND caller = $2 AND key_hash = $3`, audience, caller, keyHash)
-		return "", false, false, nil
-	}
-
-	// Record exists - check if it's completed (could be from a previous run)
-	if existingStatus == IdempotencyStatusCompleted && existingResultRef != "" {
-		return existingResultRef, true, false, nil
-	}
-
-	// If record is still processing, return still processing
-	if existingStatus == IdempotencyStatusProcessing {
-		return "", false, false, ErrStillProcessing
-	}
-
-	// Successfully inserted new record (processing) or updated existing processing record
+	// Successfully inserted new record (status=processing) - proceed with processing
 	if err := tx.Commit(); err != nil {
 		return "", false, false, err
 	}

@@ -150,10 +150,16 @@ func ValidateWebhookRequest(req *WebhookRequest) []ErrorDetail {
 		details = append(details, ErrorDetail{Field: "status", Reason: "must be one of: firing, resolved, informational"})
 	}
 
-	if len(req.Labels) > 64 {
+	// Handle nil Labels map
+	labels := req.Labels
+	if labels == nil {
+		labels = make(map[string]string)
+	}
+
+	if len(labels) > 64 {
 		details = append(details, ErrorDetail{Field: "labels", Reason: "at most 64 entries"})
 	}
-	for k, v := range req.Labels {
+	for k, v := range labels {
 		if len(k) > 128 {
 			details = append(details, ErrorDetail{Field: "labels." + k, Reason: "key at most 128 characters"})
 		}
