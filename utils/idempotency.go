@@ -64,6 +64,7 @@ func CheckIdempotency(db *sql.DB, audience, caller, idempotencyKey string, req *
 	if err != nil {
 		return "", false, false, err
 	}
+	// Rollback on error, commit on success
 	defer func() {
 		_ = tx.Rollback()
 	}()
@@ -78,7 +79,6 @@ func CheckIdempotency(db *sql.DB, audience, caller, idempotencyKey string, req *
 		VALUES ($1, $2, $3, $4, $5, $6, now(), now() + interval '24 hours')
 		ON CONFLICT (audience, caller, key_hash) DO UPDATE SET
 			request_hash = EXCLUDED.request_hash,
-			status = EXCLUDED.status,
 			result_reference = EXCLUDED.result_reference,
 			expires_at = EXCLUDED.expires_at
 		RETURNING request_hash, status, result_reference
@@ -113,7 +113,15 @@ func CheckIdempotency(db *sql.DB, audience, caller, idempotencyKey string, req *
 		return "", false, false, err
 	}
 
-	// Successfully inserted new record (processing)
+	// Record exists - check if it's completed (could be from a previous run)
+	if existingStatus == IdempotencyStatusCompleted && existingResultRef != "" {
+		return existingResultRef, true, false, nil
+	}
+
+	// Successfully inserted new record (processing) or updated existing processing record
+	if err := tx.Commit(); err != nil {
+		return "", false, false, err
+	}
 	return "", false, false, nil
 }
 
