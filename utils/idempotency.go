@@ -64,7 +64,6 @@ func CheckIdempotency(db *sql.DB, audience, caller, idempotencyKey string, req *
 	if err != nil {
 		return "", false, false, err
 	}
-	// Rollback on error, commit on success
 	defer func() {
 		_ = tx.Rollback()
 	}()
@@ -73,6 +72,7 @@ func CheckIdempotency(db *sql.DB, audience, caller, idempotencyKey string, req *
 	var existingRequestHash string
 	var existingStatus string
 	var existingResultRef string
+	var existingExpiresAt time.Time
 
 	err = tx.QueryRowContext(ctx, `
 		INSERT INTO idempotency_records (audience, caller, key_hash, request_hash, status, result_reference, created_at, expires_at)
@@ -84,8 +84,8 @@ func CheckIdempotency(db *sql.DB, audience, caller, idempotencyKey string, req *
 				ELSE idempotency_records.result_reference
 			END,
 			expires_at = EXCLUDED.expires_at
-		RETURNING request_hash, status, result_reference
-	`, audience, caller, keyHash, requestHash, IdempotencyStatusProcessing, "").Scan(&existingRequestHash, &existingStatus, &existingResultRef)
+		RETURNING request_hash, status, result_reference, expires_at
+	`, audience, caller, keyHash, requestHash, IdempotencyStatusProcessing, "").Scan(&existingRequestHash, &existingStatus, &existingResultRef, &existingExpiresAt)
 
 	if err != nil {
 		// Check if it's a unique constraint violation on different hash (conflict)
@@ -97,11 +97,17 @@ func CheckIdempotency(db *sql.DB, audience, caller, idempotencyKey string, req *
 		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
 			// Fetch the existing record
 			err = tx.QueryRowContext(ctx, `
-				SELECT request_hash, status, result_reference FROM idempotency_records
+				SELECT request_hash, status, result_reference, expires_at FROM idempotency_records
 				WHERE audience = $1 AND caller = $2 AND key_hash = $3
-			`, audience, caller, keyHash).Scan(&existingRequestHash, &existingStatus, &existingResultRef)
+			`, audience, caller, keyHash).Scan(&existingRequestHash, &existingStatus, &existingResultRef, &existingExpiresAt)
 			if err != nil {
 				return "", false, false, err
+			}
+			// Check if expired
+			if time.Now().After(existingExpiresAt) {
+				// Expired - delete and treat as new
+				tx.ExecContext(ctx, `DELETE FROM idempotency_records WHERE audience = $1 AND caller = $2 AND key_hash = $3`, audience, caller, keyHash)
+				return "", false, false, nil
 			}
 			if existingRequestHash != requestHash {
 				return "", false, true, nil // Conflict: same key, different request
@@ -116,9 +122,21 @@ func CheckIdempotency(db *sql.DB, audience, caller, idempotencyKey string, req *
 		return "", false, false, err
 	}
 
+	// Check if existing record is expired
+	if time.Now().After(existingExpiresAt) {
+		// Expired - delete and treat as new
+		tx.ExecContext(ctx, `DELETE FROM idempotency_records WHERE audience = $1 AND caller = $2 AND key_hash = $3`, audience, caller, keyHash)
+		return "", false, false, nil
+	}
+
 	// Record exists - check if it's completed (could be from a previous run)
 	if existingStatus == IdempotencyStatusCompleted && existingResultRef != "" {
 		return existingResultRef, true, false, nil
+	}
+
+	// If record is still processing, return still processing
+	if existingStatus == IdempotencyStatusProcessing {
+		return "", false, false, ErrStillProcessing
 	}
 
 	// Successfully inserted new record (processing) or updated existing processing record

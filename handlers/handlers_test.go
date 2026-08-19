@@ -360,9 +360,32 @@ func TestGrafanaWebhook_Unauthorized(t *testing.T) {
 		MaxBodyBytes: 1048576,
 		TestMode:     false,
 	}
-	m := metrics.NewMetrics()
+	// Use a custom registry for tests to avoid duplicate metrics registration
+	reg := prometheus.NewRegistry()
+	m := metrics.NewMetricsWithRegistry(reg)
 	h := handlers.NewHandler(db, cfg, m)
-	th := &TestHandler{Handler: h, db: db}
+
+	// Create router same as main.go
+	r := mux.NewRouter()
+	r.Use(middleware.LoggingMiddleware("pamawas-ingest"))
+	r.Use(middleware.ErrorLoggingMiddleware("pamawas-ingest"))
+	r.Use(middleware.BodyLimitMiddleware(cfg.MaxBodyBytes))
+
+	// V1 API endpoints
+	v1 := r.PathPrefix("/v1").Subrouter()
+	v1.HandleFunc("/webhooks/grafana", h.GrafanaWebhook).Methods("POST")
+	v1.HandleFunc("/webhooks/generic", h.GenericWebhook).Methods("POST")
+
+	// Legacy endpoints (transitional, to be removed after migration)
+	r.HandleFunc("/webhook/grafana", h.GrafanaWebhook).Methods("POST")
+	r.HandleFunc("/webhook/generic", h.GenericWebhook).Methods("POST")
+
+	// Health and metrics
+	r.HandleFunc("/healthz", h.HealthHandler).Methods("GET")
+	r.HandleFunc("/ready", h.ReadyHandler).Methods("GET")
+	r.Handle("/metrics", h.MetricsHandler())
+
+	th := &TestHandler{Handler: h, db: db, router: r}
 
 	payload := map[string]interface{}{
 		"ruleName":  "High CPU Usage",

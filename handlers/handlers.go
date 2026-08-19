@@ -150,11 +150,17 @@ func (h *Handler) processEvent(ctx context.Context, requestID, source string, re
 		log.Error().Err(err).Str("event_id", eventID).Msg("Error marshaling labels")
 		return "", false, err
 	}
+	rawPayloadJSON, err := json.Marshal(event.RawPayload)
+	if err != nil {
+		h.metrics.WebhookRequestsTotal.WithLabelValues(endpoint, "500").Inc()
+		log.Error().Err(err).Str("event_id", eventID).Msg("Error marshaling raw payload")
+		return "", false, err
+	}
 	_, err = h.db.ExecContext(ctx,
 		`INSERT INTO events (id, source, source_event_id, fingerprint, type, occurred_at, service, environment, severity, title, status, labels, raw_payload, schema_version)
 		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
 		event.ID, event.Source, event.SourceEventID, event.Fingerprint, event.Type, event.OccurredAt,
-		event.Service, event.Environment, event.Severity, event.Title, event.Status, labelsJSON, event.RawPayload, event.SchemaVersion,
+		event.Service, event.Environment, event.Severity, event.Title, event.Status, labelsJSON, rawPayloadJSON, event.SchemaVersion,
 	)
 	h.metrics.DBWriteDuration.Observe(time.Since(dbStart).Seconds())
 
