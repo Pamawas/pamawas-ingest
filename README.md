@@ -1,29 +1,70 @@
 # pamawas-ingest
 
-**Ingest API** — Generic webhook + Grafana adapter, event normalization, PostgreSQL persistence
+**Webhook Ingestion API** — Normalizes alerts from Grafana, Prometheus, Loki, and generic sources into a common event schema and persists to PostgreSQL.
 
-Language: Go 1.26
+[![Go Version](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go)](https://go.dev/)
+[![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker)](https://docker.com/)
+
+---
 
 ## Purpose
 
-Handles incoming webhooks from various sources (Grafana, Prometheus, Loki, generic webhooks, etc.), normalizes events to the common schema defined in the MVP design, and writes them to the PostgreSQL events table. This is the entry point for all infrastructure events into the Pamawas system.
+This is the **entry point** for all infrastructure events into Pamawas. It accepts webhook payloads, validates and normalizes them to the common event schema, and writes them to the PostgreSQL `events` table.
 
-## MVP Reference
+## Features
 
-- **MVP §10 Build Order #1**: Ingest API — one endpoint, normalize any JSON into the common event schema, write to `events`. Grafana webhook is a payload-mapping adapter on top of this.
-- **MVP §5 Data Model**: Common Event Schema (events table)
-- **MVP §8 Architecture Overview**: Ingest API (Go) component
+- **Generic webhook endpoint** — Accepts any JSON payload, extracts key fields
+- **Grafana adapter** — Maps Grafana alert webhook format to common schema
+- **PostgreSQL persistence** — Connection pooling, retries, idempotency
+- **Observability built-in** — Health checks, Prometheus metrics, structured JSON logging, OpenTelemetry tracing
+- **Multi-stage Docker build** — Optimized alpine images
 
-## Responsibilities
+## Quick Start
 
-- Accept webhook payloads via HTTP POST
-- Validate and normalize to common event schema (MVP §5)
-- Write normalized events to PostgreSQL `events` table
-- Provide health check endpoint (`/healthz`) for orchestration
-- Structured logging and Prometheus metrics (`/metrics`)
-- OpenTelemetry tracing to Tempo
+```bash
+# Docker (recommended)
+docker run -e DATABASE_URL="postgres://user:pass@host:5432/db" \
+  -p 8080:8080 ghcr.io/yoganovvaindra/pamawas-ingest:latest
 
-## Common Event Schema (MVP §5)
+# Local development
+go run main.go
+```
+
+## Configuration
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `DATABASE_URL` | PostgreSQL connection string | **Required** |
+| `PORT` | HTTP server port | `8080` |
+| `LOG_LEVEL` | debug, info, warn, error | `info` |
+| `ENVIRONMENT` | deployment, staging, production | `development` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Tempo OTLP gRPC endpoint | `tempo:4317` |
+
+## API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/webhook/generic` | POST | Accept any JSON, normalize to common schema |
+| `/webhook/grafana` | POST | Grafana alert webhook adapter |
+| `/healthz` | GET | Health check with DB connectivity |
+| `/ready` | GET | Readiness probe |
+| `/metrics` | GET | Prometheus metrics |
+
+## Example Webhooks
+
+```bash
+# Generic webhook
+curl -X POST http://localhost:8080/webhook/generic \
+  -H "Content-Type: application/json" \
+  -d '{"timestamp":"2026-08-13T02:14:23Z","service":"payment-api","title":"High latency","severity":"warning"}'
+
+# Grafana webhook
+curl -X POST http://localhost:8080/webhook/grafana \
+  -H "Content-Type: application/json" \
+  -d '{"ruleName":"High API latency","evalMatches":[{"time":"2026-08-13T02:14:23Z"}],"tags":{"service":"payment-api"}}'
+```
+
+## Common Event Schema
 
 ```json
 {
@@ -36,114 +77,32 @@ Handles incoming webhooks from various sources (Grafana, Prometheus, Loki, gener
   "severity": "warning",
   "title": "High API latency",
   "status": "firing",
-  "labels": {
-    "cluster": "prod-a",
-    "namespace": "payments",
-    "team": "platform"
-  },
+  "labels": {"cluster": "prod-a", "team": "platform"},
   "raw_payload": {}
 }
 ```
 
-## Endpoints
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/webhook/grafana` | POST | Grafana alert webhook adapter |
-| `/webhook/generic` | POST | Generic webhook - accepts any JSON |
-| `/healthz` | GET | Health check with DB connectivity |
-| `/ready` | GET | Readiness check |
-| `/metrics` | GET | Prometheus metrics |
-
-## Configuration (Environment Variables)
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `DATABASE_URL` | PostgreSQL connection string | Required |
-| `PORT` | HTTP server port | `8080` |
-| `LOG_LEVEL` | Log level (debug, info, warn, error) | `info` |
-| `ENVIRONMENT` | Deployment environment | `development` |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP gRPC endpoint for Tempo | `tempo:4317` |
-
 ## Observability
 
-| Feature | Endpoint/Format |
-|---------|-----------------|
-| **Prometheus Metrics** | `/metrics` — `EventsProcessedTotal`, `WebhookRequestsTotal`, `WebhookRequestDuration`, `DBWriteDuration`, `DBConnectionErrors` |
-| **Structured JSON Logging** | stdout — trace_id, span_id, service, component, method, path, status_code, duration_ms |
-| **OpenTelemetry Tracing** | OTLP gRPC → Tempo:4317 — W3C TraceContext propagation |
+| Feature | Endpoint |
+|---------|----------|
+| Prometheus Metrics | `/metrics` — `EventsProcessedTotal`, `WebhookRequestsTotal`, `DBWriteDuration` |
+| JSON Logging | stdout — trace_id, span_id, service, method, path, status_code, duration_ms |
+| OpenTelemetry | OTLP gRPC → Tempo:4317 |
 
-## Database Schema (from pamawas-schema)
-
-```sql
-CREATE TABLE IF NOT EXISTS events (
-    id TEXT PRIMARY KEY,
-    source TEXT NOT NULL,
-    type TEXT NOT NULL,
-    timestamp TIMESTAMPTZ NOT NULL,
-    service TEXT,
-    environment TEXT,
-    severity TEXT,
-    title TEXT,
-    status TEXT,
-    labels JSONB,
-    raw_payload JSONB
-);
-```
-
-## Current Implementation Status
-
-- ✅ Generic webhook endpoint with normalization
-- ✅ Grafana webhook adapter with payload mapping
-- ✅ PostgreSQL persistence with connection pooling
-- ✅ Health check endpoint (`/healthz`) + readiness (`/ready`)
-- ✅ Multi-stage Dockerfile (Go 1.26-alpine builder, alpine runtime)
-- ✅ GitHub Actions workflow (main + dev branches, GHCR publishing)
-- ✅ **Prometheus metrics endpoint (`/metrics`)**
-- ✅ **Structured JSON logging with zerolog**
-- ✅ **Request/response logging middleware with Loki labels**
-- ✅ **OpenTelemetry tracing (OTLP gRPC → Tempo)**
-- ✅ Viper config management (YAML + ENV)
-
-## Kanban Tasks
-
-- `t_5f87dd0d` — Design webhook schema and common event normalization (architect)
-- `t_44d95588` — Implement generic webhook endpoint with normalization (backend-dev)
-- `t_2c1f8b2e` — Implement Grafana webhook adapter (backend-dev)
-- `t_a42376a3` — Improve database connection handling with pooling and retries (backend-dev)
-- `t_ebb6cd36` — Add health check endpoint with DB connectivity check (backend-dev)
-- `t_f4c05ff4` — Optimize Dockerfile with multi-stage build (devops)
-- `t_f20183f2` — Write unit tests for webhook handlers (qa-dev)
-
-## Dependencies
-
-- **PostgreSQL** — Events table (via pamawas-schema migrations)
-- **pamawas-schema** — Shared types and migrations (parent: `t_d1cdd7a9`)
-
-## Build & Run
+## Building
 
 ```bash
-# Local development
-go run main.go
-
 # Docker
 docker build -t pamawas-ingest .
-docker run -e DATABASE_URL="postgres://..." -p 8080:8080 pamawas-ingest
 
-# With docker-compose (when available)
-docker-compose up pamawas-ingest
+# Binary
+go build -o pamawas-ingest main.go
 ```
 
-## Testing Webhooks
+## Related
 
-```bash
-# Generic webhook
-curl -X POST http://localhost:8080/webhook/generic \
-  -H "Content-Type: application/json" \
-  -d '{"timestamp":"2026-08-13T02:14:23Z","service":"payment-api","title":"High latency"}'
-
-# Grafana webhook
-curl -X POST http://localhost:8080/webhook/grafana \
-  -H "Content-Type: application/json" \
-  -d '{"ruleName":"High API latency","evalMatches":[{"time":"2026-08-13T02:14:23Z"}],"tags":{"service":"payment-api"}}'
-```
+- **Root README**: [../README.md](../README.md)
+- **System Design**: [../system-design.md](../system-design.md)
+- **Database Schema**: [../pamawas-schema/README.md](../pamawas-schema/README.md)
+- **Docker Compose**: [../pamawas-infra/docker-compose/](../pamawas-infra/docker-compose/)

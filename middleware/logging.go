@@ -55,6 +55,21 @@ func LoggingMiddleware(serviceName string) func(http.Handler) http.Handler {
 	}
 }
 
+// BodyLimitMiddleware limits the request body size
+func BodyLimitMiddleware(maxBytes int64) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if maxBytes > 0 && r.ContentLength > maxBytes {
+				http.Error(w, "Request body too large", http.StatusRequestEntityTooLarge)
+				return
+			}
+			// Wrap the body reader to enforce limit during read
+			r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 // ErrorLoggingMiddleware logs panics and errors
 func ErrorLoggingMiddleware(serviceName string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {

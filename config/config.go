@@ -2,16 +2,18 @@ package config
 
 import (
 	"fmt"
-	"time"
 
 	"github.com/spf13/viper"
 )
 
 type Config struct {
-	DatabaseURL string
-	Port        string
-	LogLevel    string
-	Environment string
+	DatabaseURL     string
+	Port            string
+	LogLevel        string
+	Environment     string
+	WebhookToken    string
+	MaxBodyBytes    int64
+	TestMode        bool
 }
 
 func Load() Config {
@@ -28,6 +30,8 @@ func Load() Config {
 	v.SetDefault("port", "8080")
 	v.SetDefault("log_level", "info")
 	v.SetDefault("environment", "development")
+	v.SetDefault("max_body_bytes", 1048576) // 1 MiB
+	v.SetDefault("test_mode", false)
 
 	if err := v.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
@@ -37,10 +41,13 @@ func Load() Config {
 	}
 
 	cfg := Config{
-		DatabaseURL: v.GetString("database_url"),
-		Port:        v.GetString("port"),
-		LogLevel:    v.GetString("log_level"),
-		Environment: v.GetString("environment"),
+		DatabaseURL:  v.GetString("database_url"),
+		Port:         v.GetString("port"),
+		LogLevel:     v.GetString("log_level"),
+		Environment:  v.GetString("environment"),
+		WebhookToken: v.GetString("webhook_token"),
+		MaxBodyBytes: v.GetInt64("max_body_bytes"),
+		TestMode:     v.GetBool("test_mode"),
 	}
 
 	if cfg.DatabaseURL == "" {
@@ -56,8 +63,8 @@ func (c Config) Validate() error {
 	if c.Port == "" {
 		return fmt.Errorf("port is required")
 	}
-	if _, err := time.ParseDuration("1h"); err != nil {
-		// Just a sanity check
+	if c.MaxBodyBytes <= 0 {
+		return fmt.Errorf("max_body_bytes must be positive")
 	}
 	return nil
 }

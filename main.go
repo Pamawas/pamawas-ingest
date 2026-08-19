@@ -37,8 +37,8 @@ func main() {
 		log.Fatal().Err(err).Msg("Failed to initialize OpenTelemetry")
 	}
 	defer func() {
-		if err := otelShutdown(context.Background()); err != nil {
-			log.Error().Err(err).Msg("Error shutting down OpenTelemetry")
+		if shutdownErr := otelShutdown(context.Background()); shutdownErr != nil {
+			log.Error().Err(shutdownErr).Msg("Error shutting down OpenTelemetry")
 		}
 	}()
 
@@ -92,8 +92,14 @@ func main() {
 	r := mux.NewRouter()
 	r.Use(middleware.LoggingMiddleware("pamawas-ingest"))
 	r.Use(middleware.ErrorLoggingMiddleware("pamawas-ingest"))
+	r.Use(middleware.BodyLimitMiddleware(cfg.MaxBodyBytes))
 
-	// Webhook endpoints
+	// V1 API endpoints
+	v1 := r.PathPrefix("/v1").Subrouter()
+	v1.HandleFunc("/webhooks/grafana", h.GrafanaWebhook).Methods("POST")
+	v1.HandleFunc("/webhooks/generic", h.GenericWebhook).Methods("POST")
+
+	// Legacy endpoints (transitional, to be removed after migration)
 	r.HandleFunc("/webhook/grafana", h.GrafanaWebhook).Methods("POST")
 	r.HandleFunc("/webhook/generic", h.GenericWebhook).Methods("POST")
 
