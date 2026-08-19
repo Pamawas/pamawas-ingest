@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	_ "github.com/lib/pq"
+
 	"github.com/Pamawas/pamawas-ingest/models"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	_ "github.com/lib/pq"
+
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
