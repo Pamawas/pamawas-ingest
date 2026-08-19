@@ -50,8 +50,8 @@ func TestCheckIdempotency(t *testing.T) {
 
 	// Second call with same key and request - should return duplicate
 	eventID, duplicate, conflict, err = CheckIdempotency(db, "ingest", "generic", "test-key-1", req)
-	require.NoError(t, err)
-	assert.False(t, duplicate) // Still processing, not completed yet
+	assert.ErrorIs(t, err, ErrStillProcessing)
+	assert.False(t, duplicate)
 	assert.False(t, conflict)
 	assert.Empty(t, eventID)
 

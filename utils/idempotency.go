@@ -6,23 +6,22 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
-	"strings"
 	"time"
 
-	"github.com/rs/zerolog/log"
 	"github.com/Pamawas/pamawas-ingest/models"
+	"github.com/rs/zerolog/log"
 )
 
 // IdempotencyRecord represents an idempotency record in the database
 type IdempotencyRecord struct {
-	Audience       string
-	Caller         string
-	KeyHash        string
-	RequestHash    string
-	Status         string
+	Audience        string
+	Caller          string
+	KeyHash         string
+	RequestHash     string
+	Status          string
 	ResultReference string
-	CreatedAt      time.Time
-	ExpiresAt      time.Time
+	CreatedAt       time.Time
+	ExpiresAt       time.Time
 }
 
 // IdempotencyStatus constants
@@ -68,60 +67,53 @@ func CheckIdempotency(db *sql.DB, audience, caller, idempotencyKey string, req *
 		_ = tx.Rollback()
 	}()
 
-	// Try to insert or find existing record
-	var existingRequestHash string
-	var existingStatus string
-	var existingResultRef string
-	var existingExpiresAt time.Time
-
+	// Insert only when the key is new. Existing records must not be mutated
+	// before their request hash, status, and expiration are classified.
+	var inserted bool
 	err = tx.QueryRowContext(ctx, `
 		INSERT INTO idempotency_records (audience, caller, key_hash, request_hash, status, result_reference, created_at, expires_at)
 		VALUES ($1, $2, $3, $4, $5, $6, now(), now() + interval '24 hours')
-		ON CONFLICT (audience, caller, key_hash) DO UPDATE SET
-			request_hash = EXCLUDED.request_hash,
-			result_reference = CASE 
-				WHEN EXCLUDED.result_reference != '' THEN EXCLUDED.result_reference
-				ELSE idempotency_records.result_reference
-			END,
-			expires_at = EXCLUDED.expires_at
-		RETURNING request_hash, status, result_reference, expires_at
-	`, audience, caller, keyHash, requestHash, IdempotencyStatusProcessing, "").Scan(&existingRequestHash, &existingStatus, &existingResultRef, &existingExpiresAt)
+		ON CONFLICT (audience, caller, key_hash) DO NOTHING
+		RETURNING true
+	`, audience, caller, keyHash, requestHash, IdempotencyStatusProcessing, "").Scan(&inserted)
 
-	if err != nil {
-		// Check if it's a unique constraint violation on different hash (conflict)
-		if err == sql.ErrNoRows {
-			return "", false, false, err
-		}
-		// Check if we got a conflict due to different request hash
-		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
-			// Fetch the existing record
-			err = tx.QueryRowContext(ctx, `
-				SELECT request_hash, status, result_reference, expires_at FROM idempotency_records
-				WHERE audience = $1 AND caller = $2 AND key_hash = $3
-			`, audience, caller, keyHash).Scan(&existingRequestHash, &existingStatus, &existingResultRef, &existingExpiresAt)
-			if err != nil {
-				return "", false, false, err
-			}
-			// Check if expired
-			if time.Now().After(existingExpiresAt) {
-				// Expired - delete and treat as new
-				tx.ExecContext(ctx, `DELETE FROM idempotency_records WHERE audience = $1 AND caller = $2 AND key_hash = $3`, audience, caller, keyHash)
-				return "", false, false, nil
-			}
-			if existingRequestHash != requestHash {
-				return "", false, true, nil // Conflict: same key, different request
-			}
-			// Same hash - return existing result if completed
-			if existingStatus == IdempotencyStatusCompleted && existingResultRef != "" {
-				return existingResultRef, true, false, nil
-			}
-			// Still processing
-			return "", false, false, ErrStillProcessing
-		}
+	if err != nil && err != sql.ErrNoRows {
 		return "", false, false, err
 	}
+	if !inserted {
+		var existingRequestHash, existingStatus, existingResultRef string
+		var existingExpiresAt time.Time
+		err = tx.QueryRowContext(ctx, `
+			SELECT request_hash, status, COALESCE(result_reference, ''), expires_at
+			FROM idempotency_records
+			WHERE audience = $1 AND caller = $2 AND key_hash = $3
+			FOR UPDATE
+		`, audience, caller, keyHash).Scan(&existingRequestHash, &existingStatus, &existingResultRef, &existingExpiresAt)
+		if err != nil {
+			return "", false, false, err
+		}
+		if time.Now().After(existingExpiresAt) {
+			if _, err = tx.ExecContext(ctx, `
+				UPDATE idempotency_records
+				SET request_hash = $1, status = $2, result_reference = '', created_at = now(), updated_at = now(), expires_at = now() + interval '24 hours'
+				WHERE audience = $3 AND caller = $4 AND key_hash = $5
+			`, requestHash, IdempotencyStatusProcessing, audience, caller, keyHash); err != nil {
+				return "", false, false, err
+			}
+			if err = tx.Commit(); err != nil {
+				return "", false, false, err
+			}
+			return "", false, false, nil
+		}
+		if existingRequestHash != requestHash {
+			return "", false, true, nil
+		}
+		if existingStatus == IdempotencyStatusCompleted && existingResultRef != "" {
+			return existingResultRef, true, false, nil
+		}
+		return "", false, false, ErrStillProcessing
+	}
 
-	// Successfully inserted new record (status=processing) - proceed with processing
 	if err := tx.Commit(); err != nil {
 		return "", false, false, err
 	}

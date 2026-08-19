@@ -470,8 +470,8 @@ func TestGenericWebhook_Success(t *testing.T) {
 		Title:         "Database connection pool exhausted",
 		Status:        "firing",
 		Labels: map[string]string{
-			"namespace":   "payments",
-			"alert_rule":  "db_pool_exhaustion",
+			"namespace":  "payments",
+			"alert_rule": "db_pool_exhaustion",
 		},
 	}
 	body, _ := json.Marshal(req)
@@ -506,8 +506,8 @@ func TestGenericWebhook_SourceEventIDDeduplication(t *testing.T) {
 		Title:         "Database connection pool exhausted",
 		Status:        "firing",
 		Labels: map[string]string{
-			"namespace":   "payments",
-			"alert_rule":  "db_pool_exhaustion",
+			"namespace":  "payments",
+			"alert_rule": "db_pool_exhaustion",
 		},
 	}
 	body, _ := json.Marshal(req)
@@ -542,18 +542,18 @@ func TestGenericWebhook_ValidationErrors(t *testing.T) {
 	_ = newTestHandler(t, db) // Run with side effects to populate test DB
 
 	tests := []struct {
-		name           string
-		req            models.WebhookRequest
-		expectedField  string
+		name          string
+		req           models.WebhookRequest
+		expectedField string
 	}{
 		{
 			name: "missing schema version",
 			req: models.WebhookRequest{
-				Type:          "event",
-				OccurredAt:    "2026-08-16T01:47:00Z",
-				Service:       "test",
-				Environment:   "prod",
-				Title:         "Test",
+				Type:        "event",
+				OccurredAt:  "2026-08-16T01:47:00Z",
+				Service:     "test",
+				Environment: "prod",
+				Title:       "Test",
 			},
 			expectedField: "schema_version",
 		},
@@ -704,47 +704,47 @@ func TestGenericWebhook_ValidationErrors(t *testing.T) {
 			expectedField: "", // No error expected
 		},
 		{
-						name: "too many labels",
-						req: models.WebhookRequest{
-							SchemaVersion: 1,
-							Type:          "event",
-							OccurredAt:    "2026-08-16T01:47:00Z",
-							Service:       "test",
-							Environment:   "prod",
-							Title:         "Test",
-						},
-						expectedField: "labels",
-					},
-					{
-						name: "label key too long",
-						req: models.WebhookRequest{
-							SchemaVersion: 1,
-							Type:          "event",
-							OccurredAt:    "2026-08-16T01:47:00Z",
-							Service:       "test",
-							Environment:   "prod",
-							Title:         "Test",
-							Labels: map[string]string{
-								strings.Repeat("k", 129): "value",
-							},
-						},
-						expectedField: "labels." + strings.Repeat("k", 129),
-					},
-					{
-						name: "label value too long",
-						req: models.WebhookRequest{
-							SchemaVersion: 1,
-							Type:          "event",
-							OccurredAt:    "2026-08-16T01:47:00Z",
-							Service:       "test",
-							Environment:   "prod",
-							Title:         "Test",
-							Labels: map[string]string{
-								"key": strings.Repeat("v", 513),
-							},
-						},
-						expectedField: "labels.key",
-					},
+			name: "too many labels",
+			req: models.WebhookRequest{
+				SchemaVersion: 1,
+				Type:          "event",
+				OccurredAt:    "2026-08-16T01:47:00Z",
+				Service:       "test",
+				Environment:   "prod",
+				Title:         "Test",
+			},
+			expectedField: "labels",
+		},
+		{
+			name: "label key too long",
+			req: models.WebhookRequest{
+				SchemaVersion: 1,
+				Type:          "event",
+				OccurredAt:    "2026-08-16T01:47:00Z",
+				Service:       "test",
+				Environment:   "prod",
+				Title:         "Test",
+				Labels: map[string]string{
+					strings.Repeat("k", 129): "value",
+				},
+			},
+			expectedField: "labels." + strings.Repeat("k", 129),
+		},
+		{
+			name: "label value too long",
+			req: models.WebhookRequest{
+				SchemaVersion: 1,
+				Type:          "event",
+				OccurredAt:    "2026-08-16T01:47:00Z",
+				Service:       "test",
+				Environment:   "prod",
+				Title:         "Test",
+				Labels: map[string]string{
+					"key": strings.Repeat("v", 513),
+				},
+			},
+			expectedField: "labels.key",
+		},
 		{
 			name: "multiple errors",
 			req: models.WebhookRequest{
@@ -765,6 +765,7 @@ func TestGenericWebhook_ValidationErrors(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			req := tt.req
 			if tt.name == "too many labels" {
+				req.Labels = make(map[string]string)
 				// Add 65 labels
 				for i := 0; i < 65; i++ {
 					req.Labels[string(rune(i))] = "value"
@@ -772,7 +773,7 @@ func TestGenericWebhook_ValidationErrors(t *testing.T) {
 			}
 
 			details := models.ValidateWebhookRequest(&req)
-			
+
 			if tt.name == "multiple errors" {
 				// Expect 8 errors for the multiple errors test case
 				assert.Len(t, details, 8, "Error count mismatch")

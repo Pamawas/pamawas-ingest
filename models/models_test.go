@@ -36,9 +36,9 @@ func TestValidEventType(t *testing.T) {
 
 func TestValidateWebhookRequest(t *testing.T) {
 	tests := []struct {
-		name          string
-		req           *WebhookRequest
-		expectedCount int
+		name           string
+		req            *WebhookRequest
+		expectedCount  int
 		expectedFields []string
 	}{
 		{
@@ -56,13 +56,13 @@ func TestValidateWebhookRequest(t *testing.T) {
 		{
 			name: "missing schema_version",
 			req: &WebhookRequest{
-				Type:       "event",
-				OccurredAt: "2026-08-16T01:47:00Z",
-				Service:    "test",
+				Type:        "event",
+				OccurredAt:  "2026-08-16T01:47:00Z",
+				Service:     "test",
 				Environment: "prod",
-				Title:      "Test",
+				Title:       "Test",
 			},
-			expectedCount: 1,
+			expectedCount:  1,
 			expectedFields: []string{"schema_version"},
 		},
 		{
@@ -75,7 +75,7 @@ func TestValidateWebhookRequest(t *testing.T) {
 				Environment:   "prod",
 				Title:         "Test",
 			},
-			expectedCount: 1,
+			expectedCount:  1,
 			expectedFields: []string{"schema_version"},
 		},
 		{
@@ -87,7 +87,7 @@ func TestValidateWebhookRequest(t *testing.T) {
 				Environment:   "prod",
 				Title:         "Test",
 			},
-			expectedCount: 1,
+			expectedCount:  1,
 			expectedFields: []string{"type"},
 		},
 		{
@@ -100,7 +100,7 @@ func TestValidateWebhookRequest(t *testing.T) {
 				Environment:   "prod",
 				Title:         "Test",
 			},
-			expectedCount: 1,
+			expectedCount:  1,
 			expectedFields: []string{"type"},
 		},
 		{
@@ -112,7 +112,7 @@ func TestValidateWebhookRequest(t *testing.T) {
 				Environment:   "prod",
 				Title:         "Test",
 			},
-			expectedCount: 1,
+			expectedCount:  1,
 			expectedFields: []string{"occurred_at"},
 		},
 		{
@@ -125,7 +125,7 @@ func TestValidateWebhookRequest(t *testing.T) {
 				Environment:   "prod",
 				Title:         "Test",
 			},
-			expectedCount: 1,
+			expectedCount:  1,
 			expectedFields: []string{"occurred_at"},
 		},
 		{
@@ -137,7 +137,7 @@ func TestValidateWebhookRequest(t *testing.T) {
 				Environment:   "prod",
 				Title:         "Test",
 			},
-			expectedCount: 1,
+			expectedCount:  1,
 			expectedFields: []string{"service"},
 		},
 		{
@@ -149,7 +149,7 @@ func TestValidateWebhookRequest(t *testing.T) {
 				Service:       "test",
 				Title:         "Test",
 			},
-			expectedCount: 1,
+			expectedCount:  1,
 			expectedFields: []string{"environment"},
 		},
 		{
@@ -163,7 +163,7 @@ func TestValidateWebhookRequest(t *testing.T) {
 				Severity:      "invalid",
 				Title:         "Test",
 			},
-			expectedCount: 1,
+			expectedCount:  1,
 			expectedFields: []string{"severity"},
 		},
 		{
@@ -188,7 +188,7 @@ func TestValidateWebhookRequest(t *testing.T) {
 				Service:       "test",
 				Environment:   "prod",
 			},
-			expectedCount: 1,
+			expectedCount:  1,
 			expectedFields: []string{"title"},
 		},
 		{
@@ -202,7 +202,7 @@ func TestValidateWebhookRequest(t *testing.T) {
 				Title:         "Test",
 				Status:        "invalid",
 			},
-			expectedCount: 1,
+			expectedCount:  1,
 			expectedFields: []string{"status"},
 		},
 		{
@@ -229,41 +229,41 @@ func TestValidateWebhookRequest(t *testing.T) {
 				Title:         "Test",
 				Labels:        make(map[string]string),
 			},
-			expectedCount: 1,
+			expectedCount:  1,
 			expectedFields: []string{"labels"},
 		},
 		{
-					name: "label key too long",
-					req: &WebhookRequest{
-						SchemaVersion: 1,
-						Type:          "event",
-						OccurredAt:    "2026-08-16T01:47:00Z",
-						Service:       "test",
-						Environment:   "prod",
-						Title:         "Test",
-						Labels: map[string]string{
-							strings.Repeat("k", 129): "value",
-						},
-					},
-					expectedCount:  1,
-					expectedFields: []string{"labels." + strings.Repeat("k", 129)},
+			name: "label key too long",
+			req: &WebhookRequest{
+				SchemaVersion: 1,
+				Type:          "event",
+				OccurredAt:    "2026-08-16T01:47:00Z",
+				Service:       "test",
+				Environment:   "prod",
+				Title:         "Test",
+				Labels: map[string]string{
+					strings.Repeat("k", 129): "value",
 				},
-				{
-					name: "label value too long",
-					req: &WebhookRequest{
-						SchemaVersion: 1,
-						Type:          "event",
-						OccurredAt:    "2026-08-16T01:47:00Z",
-						Service:       "test",
-						Environment:   "prod",
-						Title:         "Test",
-						Labels: map[string]string{
-							"key": strings.Repeat("v", 513),
-						},
-					},
-					expectedCount:  1,
-					expectedFields: []string{"labels.key"},
+			},
+			expectedCount:  1,
+			expectedFields: []string{"labels." + strings.Repeat("k", 129)},
+		},
+		{
+			name: "label value too long",
+			req: &WebhookRequest{
+				SchemaVersion: 1,
+				Type:          "event",
+				OccurredAt:    "2026-08-16T01:47:00Z",
+				Service:       "test",
+				Environment:   "prod",
+				Title:         "Test",
+				Labels: map[string]string{
+					"key": strings.Repeat("v", 513),
 				},
+			},
+			expectedCount:  1,
+			expectedFields: []string{"labels.key"},
+		},
 		{
 			name: "multiple errors",
 			req: &WebhookRequest{
@@ -283,6 +283,7 @@ func TestValidateWebhookRequest(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if tt.name == "too many labels" {
+				tt.req.Labels = make(map[string]string)
 				// Add 65 labels
 				for i := 0; i < 65; i++ {
 					tt.req.Labels[string(rune(i))] = "value"
@@ -318,8 +319,8 @@ func TestToCommonEvent(t *testing.T) {
 		Title:         "Database connection pool exhausted",
 		Status:        "firing",
 		Labels: map[string]string{
-			"namespace":   "payments",
-			"alert_rule":  "db_pool_exhaustion",
+			"namespace":  "payments",
+			"alert_rule": "db_pool_exhaustion",
 		},
 	}
 
@@ -420,7 +421,7 @@ func TestGrafanaToWebhookRequest_EvalMatchTimestamp(t *testing.T) {
 
 func TestGrafanaToWebhookRequest_DefaultSeverity(t *testing.T) {
 	grafanaReq := &GrafanaWebhookRequest{
-		RuleName: "High CPU Usage",
+		RuleName:  "High CPU Usage",
 		Timestamp: "2026-08-16T01:47:00Z",
 		Tags: map[string]string{
 			"service": "payment-api",
