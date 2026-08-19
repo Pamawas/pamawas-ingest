@@ -10,6 +10,20 @@ jobs:
   test:
     name: Run Tests
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: pamawas
+          POSTGRES_PASSWORD: pamawas
+          POSTGRES_DB: pamawas_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
@@ -23,10 +37,23 @@ jobs:
     - name: Download dependencies
       run: go mod download
 
+    - name: Wait for PostgreSQL
+      run: |
+        for i in {1..30}; do
+          pg_isready -h localhost -p 5432 && break
+          sleep 1
+        done
+
+    - name: Run migrations
+      run: |
+        for f in pamawas-schema/migrations/*.sql; do
+          psql "postgres://pamawas:pamawas@localhost:5432/pamawas_test?sslmode=disable" -f "$f"
+        done
+
     - name: Run unit tests
       run: go test -v -race -coverprofile=coverage.out ./...
       env:
-        TEST_DATABASE_URL: ${{ secrets.TEST_DATABASE_URL }}
+        TEST_DATABASE_URL: postgres://pamawas:pamawas@localhost:5432/pamawas_test?sslmode=disable
 
     - name: Upload coverage
       uses: codecov/codecov-action@v4
