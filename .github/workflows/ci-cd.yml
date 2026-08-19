@@ -37,6 +37,13 @@ jobs:
     - name: Download dependencies
       run: go mod download
 
+    - name: Checkout pamawas-schema for migrations
+      uses: actions/checkout@v4
+      with:
+        repository: Pamawas/pamawas-schema
+        path: pamawas-schema
+        token: ${{ secrets.GITHUB_TOKEN }}
+
     - name: Wait for PostgreSQL
       run: |
         for i in {1..30}; do
