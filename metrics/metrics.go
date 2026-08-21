@@ -7,11 +7,11 @@ import (
 
 // Metrics holds all Prometheus metrics for the ingest service
 type Metrics struct {
-	WebhookRequestsTotal    *prometheus.CounterVec
-	WebhookRequestDuration  *prometheus.HistogramVec
-	DBWriteDuration         prometheus.Histogram
-	EventsProcessedTotal    prometheus.Counter
-	DBConnectionErrors      prometheus.Counter
+	WebhookRequestsTotal   *prometheus.CounterVec
+	WebhookRequestDuration *prometheus.HistogramVec
+	DBWriteDuration        prometheus.Histogram
+	EventsProcessedTotal   prometheus.Counter
+	DBConnectionErrors     prometheus.Counter
 }
 
 // NewMetrics creates and registers all metrics with default registry

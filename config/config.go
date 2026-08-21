@@ -7,13 +7,13 @@ import (
 )
 
 type Config struct {
-	DatabaseURL     string
-	Port            string
-	LogLevel        string
-	Environment     string
-	WebhookToken    string
-	MaxBodyBytes    int64
-	TestMode        bool
+	DatabaseURL  string
+	Port         string
+	LogLevel     string
+	Environment  string
+	WebhookToken string
+	MaxBodyBytes int64
+	TestMode     bool
 }
 
 func Load() Config {

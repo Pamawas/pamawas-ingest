@@ -9,8 +9,8 @@ import (
 	"syscall"
 	"time"
 
-	_ "github.com/lib/pq"
 	"github.com/gorilla/mux"
+	_ "github.com/lib/pq"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 

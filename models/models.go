@@ -7,36 +7,36 @@ import (
 
 // CommonEvent represents the normalized event schema.
 type CommonEvent struct {
-	ID              string            `json:"id"`
-	Source          string            `json:"source"`
-	SourceEventID   string            `json:"source_event_id,omitempty"`
-	Fingerprint     string            `json:"fingerprint,omitempty"`
-	Type            string            `json:"type"`
-	Timestamp       string            `json:"timestamp"` // ISO8601 string
-	OccurredAt      time.Time         `json:"-"`
-	Service         string            `json:"service,omitempty"`
-	Environment     string            `json:"environment,omitempty"`
-	Severity        string            `json:"severity,omitempty"`
-	Title           string            `json:"title,omitempty"`
-	Status          string            `json:"status,omitempty"`
-	Labels          map[string]string `json:"labels,omitempty"`
-	RawPayload      interface{}       `json:"raw_payload,omitempty"`
-	SchemaVersion   int               `json:"schema_version,omitempty"`
+	ID            string            `json:"id"`
+	Source        string            `json:"source"`
+	SourceEventID string            `json:"source_event_id,omitempty"`
+	Fingerprint   string            `json:"fingerprint,omitempty"`
+	Type          string            `json:"type"`
+	Timestamp     string            `json:"timestamp"` // ISO8601 string
+	OccurredAt    time.Time         `json:"-"`
+	Service       string            `json:"service,omitempty"`
+	Environment   string            `json:"environment,omitempty"`
+	Severity      string            `json:"severity,omitempty"`
+	Title         string            `json:"title,omitempty"`
+	Status        string            `json:"status,omitempty"`
+	Labels        map[string]string `json:"labels,omitempty"`
+	RawPayload    interface{}       `json:"raw_payload,omitempty"`
+	SchemaVersion int               `json:"schema_version,omitempty"`
 }
 
 // WebhookRequest represents the v1 generic webhook request
 type WebhookRequest struct {
-	SchemaVersion  int                    `json:"schema_version"`
-	SourceEventID  string                 `json:"source_event_id,omitempty"`
-	Type           string                 `json:"type"`
-	OccurredAt     string                 `json:"occurred_at"`
-	Service        string                 `json:"service"`
-	Environment    string                 `json:"environment"`
-	Severity       string                 `json:"severity,omitempty"`
-	Title          string                 `json:"title,omitempty"`
-	Status         string                 `json:"status,omitempty"`
-	Labels         map[string]string      `json:"labels,omitempty"`
-	RawPayload     map[string]interface{} `json:"raw_payload,omitempty"`
+	SchemaVersion int                    `json:"schema_version"`
+	SourceEventID string                 `json:"source_event_id,omitempty"`
+	Type          string                 `json:"type"`
+	OccurredAt    string                 `json:"occurred_at"`
+	Service       string                 `json:"service"`
+	Environment   string                 `json:"environment"`
+	Severity      string                 `json:"severity,omitempty"`
+	Title         string                 `json:"title,omitempty"`
+	Status        string                 `json:"status,omitempty"`
+	Labels        map[string]string      `json:"labels,omitempty"`
+	RawPayload    map[string]interface{} `json:"raw_payload,omitempty"`
 }
 
 // WebhookResponse represents the response to webhook requests
@@ -52,9 +52,9 @@ type WebhookResponse struct {
 
 // ErrorResponse represents the error envelope
 type ErrorResponse struct {
-	Code    string              `json:"code"`
-	Message string              `json:"message"`
-	Details []ErrorDetail       `json:"details,omitempty"`
+	Code    string        `json:"code"`
+	Message string        `json:"message"`
+	Details []ErrorDetail `json:"details,omitempty"`
 }
 
 // ErrorDetail represents a single error detail
@@ -201,17 +201,17 @@ func (r *WebhookRequest) ToCommonEvent(source string, eventID string, fingerprin
 
 // GrafanaWebhookRequest represents the v1 grafana webhook request (adapted)
 type GrafanaWebhookRequest struct {
-	RuleName     string                 `json:"ruleName"`
-	Timestamp    string                 `json:"timestamp,omitempty"`
-	EvalMatches  []EvalMatch            `json:"evalMatches,omitempty"`
-	Tags         map[string]string      `json:"tags,omitempty"`
-	RawPayload   map[string]interface{} `json:"-"`
+	RuleName    string                 `json:"ruleName"`
+	Timestamp   string                 `json:"timestamp,omitempty"`
+	EvalMatches []EvalMatch            `json:"evalMatches,omitempty"`
+	Tags        map[string]string      `json:"tags,omitempty"`
+	RawPayload  map[string]interface{} `json:"-"`
 }
 
 // EvalMatch represents a grafana eval match
 type EvalMatch struct {
-	Time  string `json:"time"`
-	Value string `json:"value"`
+	Time   string            `json:"time"`
+	Value  string            `json:"value"`
 	Metric map[string]string `json:"metric,omitempty"`
 }
 

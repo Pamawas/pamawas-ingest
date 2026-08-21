@@ -18,8 +18,8 @@ func TestGenerateFingerprint(t *testing.T) {
 		Status:        "firing",
 		OccurredAt:    "2026-08-16T01:47:00Z",
 		Labels: map[string]string{
-			"namespace":   "payments",
-			"alert_rule":  "db_pool_exhaustion",
+			"namespace":  "payments",
+			"alert_rule": "db_pool_exhaustion",
 		},
 	}
 
@@ -45,16 +45,16 @@ func TestGenerateFingerprint(t *testing.T) {
 
 func TestGenerateFingerprintFromCommon(t *testing.T) {
 	event := &models.CommonEvent{
-		Type:      "alert",
-		Service:   "payment-api",
+		Type:        "alert",
+		Service:     "payment-api",
 		Environment: "production",
-		Severity:  "high",
-		Title:     "Database connection pool exhausted",
-		Status:    "firing",
-		Timestamp: "2026-08-16T01:47:00Z",
+		Severity:    "high",
+		Title:       "Database connection pool exhausted",
+		Status:      "firing",
+		Timestamp:   "2026-08-16T01:47:00Z",
 		Labels: map[string]string{
-			"namespace":   "payments",
-			"alert_rule":  "db_pool_exhaustion",
+			"namespace":  "payments",
+			"alert_rule": "db_pool_exhaustion",
 		},
 	}
 
