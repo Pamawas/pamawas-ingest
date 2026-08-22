@@ -173,7 +173,11 @@ func ValidateWebhookRequest(req *WebhookRequest) []ErrorDetail {
 
 // ToCommonEvent converts a WebhookRequest to a CommonEvent
 func (r *WebhookRequest) ToCommonEvent(source string, eventID string, fingerprint string) CommonEvent {
-	occurredAt, _ := time.Parse(time.RFC3339, r.OccurredAt)
+	occurredAt, err := time.Parse(time.RFC3339, r.OccurredAt)
+	if err != nil {
+		// Should not happen as validation passes, but handle gracefully
+		occurredAt = time.Now().UTC()
+	}
 	// Normalize to UTC
 	occurredAt = occurredAt.UTC()
 	status := r.Status

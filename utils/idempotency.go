@@ -64,7 +64,9 @@ func CheckIdempotency(db *sql.DB, audience, caller, idempotencyKey string, req *
 		return "", false, false, err
 	}
 	defer func() {
-		_ = tx.Rollback()
+		if rbErr := tx.Rollback(); rbErr != nil && rbErr != sql.ErrTxDone {
+			log.Error().Err(rbErr).Msg("Failed to rollback transaction")
+		}
 	}()
 
 	// Insert only when the key is new. Existing records must not be mutated

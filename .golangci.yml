@@ -21,7 +21,7 @@ linters:
         - G115 # Ignore math/big.Int in tests
     errcheck:
       check-type-assertions: true
-      check-blank: false
+      check-blank: true
     govet:
       enable:
         - shadow
