@@ -89,6 +89,131 @@ func (h *Handler) validateAuth(r *http.Request, _ string) bool {
 	return auth == expected
 }
 
+// checkPreconditions runs common webhook validation checks
+func (h *Handler) checkPreconditions(w http.ResponseWriter, requestID, endpoint string, r *http.Request) bool {
+	if !validateContentType(r) {
+		h.metrics.WebhookRequestsTotal.WithLabelValues(endpoint, "415").Inc()
+		writeErrorResponse(w, requestID, http.StatusUnsupportedMediaType, "invalid_request", "Content-Type must be application/json", nil)
+		return false
+	}
+	if !h.validateAuth(r, endpoint) {
+		h.metrics.WebhookRequestsTotal.WithLabelValues(endpoint, "401").Inc()
+		writeErrorResponse(w, requestID, http.StatusUnauthorized, "unauthorized", "Invalid or missing authentication", nil)
+		return false
+	}
+	if r.ContentLength > h.cfg.MaxBodyBytes {
+		h.metrics.WebhookRequestsTotal.WithLabelValues(endpoint, "413").Inc()
+		writeErrorResponse(w, requestID, http.StatusRequestEntityTooLarge, "invalid_request", "Request body too large", nil)
+		return false
+	}
+	return true
+}
+
+// parseJSONBody parses and validates the JSON request body
+func (h *Handler) parseJSONBody(w http.ResponseWriter, requestID, endpoint string, r *http.Request, target any) bool {
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		h.metrics.WebhookRequestsTotal.WithLabelValues(endpoint, "400").Inc()
+		writeErrorResponse(w, requestID, http.StatusBadRequest, "invalid_request", "Invalid JSON", nil)
+		return false
+	}
+	if decoder.More() {
+		h.metrics.WebhookRequestsTotal.WithLabelValues(endpoint, "400").Inc()
+		writeErrorResponse(w, requestID, http.StatusBadRequest, "invalid_request", "Trailing data after JSON object", nil)
+		return false
+	}
+	return true
+}
+
+// parseGrafanaPayload converts raw Grafana payload to normalized request
+func parseGrafanaPayload(payload map[string]interface{}) *models.GrafanaWebhookRequest {
+	grafanaReq := &models.GrafanaWebhookRequest{
+		RawPayload: payload,
+	}
+	if ruleName, ok := payload["ruleName"].(string); ok {
+		grafanaReq.RuleName = ruleName
+	}
+	if timestamp, ok := payload["timestamp"].(string); ok {
+		grafanaReq.Timestamp = timestamp
+	}
+	if evalMatches, ok := payload["evalMatches"].([]interface{}); ok {
+		grafanaReq.EvalMatches = parseEvalMatches(evalMatches)
+	}
+	if tags, ok := payload["tags"].(map[string]interface{}); ok {
+		grafanaReq.Tags = parseTags(tags)
+	}
+	return grafanaReq
+}
+
+// parseEvalMatches extracts eval matches from Grafana payload
+func parseEvalMatches(evalMatches []interface{}) []models.EvalMatch {
+	var matches []models.EvalMatch
+	for _, em := range evalMatches {
+		if emMap, ok := em.(map[string]interface{}); ok {
+			match := models.EvalMatch{}
+			if t, ok := emMap["time"].(string); ok {
+				match.Time = t
+			}
+			if v, ok := emMap["value"].(string); ok {
+				match.Value = v
+			}
+			if metric, ok := emMap["metric"].(map[string]interface{}); ok {
+				match.Metric = make(map[string]string)
+				for k, v := range metric {
+					if str, ok := v.(string); ok {
+						match.Metric[k] = str
+					}
+				}
+			}
+			matches = append(matches, match)
+		}
+	}
+	return matches
+}
+
+// parseTags extracts tags from Grafana payload
+func parseTags(tags map[string]interface{}) map[string]string {
+	result := make(map[string]string)
+	for k, v := range tags {
+		if str, ok := v.(string); ok {
+			result[k] = str
+		}
+	}
+	return result
+}
+
+// validateGrafanaRequest validates required fields in the converted webhook request
+func (h *Handler) validateGrafanaRequest(w http.ResponseWriter, requestID, endpoint string, webhookReq *models.WebhookRequest) bool {
+	if webhookReq.OccurredAt == "" {
+		h.metrics.WebhookRequestsTotal.WithLabelValues(endpoint, "422").Inc()
+		writeErrorResponse(w, requestID, http.StatusUnprocessableEntity, "invalid_request", "Missing timestamp",
+			[]models.ErrorDetail{{Field: "timestamp", Reason: "required"}})
+		return false
+	}
+	if webhookReq.Service == "" {
+		h.metrics.WebhookRequestsTotal.WithLabelValues(endpoint, "422").Inc()
+		writeErrorResponse(w, requestID, http.StatusUnprocessableEntity, "invalid_request", "Missing service",
+			[]models.ErrorDetail{{Field: "service", Reason: "required (from tags.service)"}})
+		return false
+	}
+	return true
+}
+
+// handleProcessEventError converts processEvent errors to HTTP responses
+func (h *Handler) handleProcessEventError(w http.ResponseWriter, requestID, endpoint string, err error, idempotencyKey string) {
+	if err == utils.ErrStillProcessing || strings.Contains(err.Error(), "conflict") {
+		writeErrorResponse(w, requestID, http.StatusConflict, "conflict", "Idempotency key conflict: same key with different request",
+			[]models.ErrorDetail{{Field: "X-Idempotency-Key", Reason: "conflict: same key with different request"}})
+		return
+	}
+	if validationErr, ok := err.(*models.ValidationError); ok {
+		writeErrorResponse(w, requestID, http.StatusUnprocessableEntity, "invalid_request", "request validation failed", validationErr.Details)
+		return
+	}
+	writeErrorResponse(w, requestID, http.StatusInternalServerError, "internal_error", "Internal server error", nil)
+}
+
 // processEvent handles the common event processing logic
 func (h *Handler) processEvent(ctx context.Context, requestID, source string, req *models.WebhookRequest, idempotencyKey string) (string, bool, error) {
 	endpoint := source
@@ -199,96 +324,19 @@ func (h *Handler) GrafanaWebhook(w http.ResponseWriter, r *http.Request) {
 	requestID := uuid.New().String()[:8]
 	endpoint := "grafana"
 
-	// Check content type
-	if !validateContentType(r) {
-		h.metrics.WebhookRequestsTotal.WithLabelValues(endpoint, "415").Inc()
-		writeErrorResponse(w, requestID, http.StatusUnsupportedMediaType, "invalid_request", "Content-Type must be application/json", nil)
+	if !h.checkPreconditions(w, requestID, endpoint, r) {
 		return
 	}
 
-	// Check auth
-	if !h.validateAuth(r, "grafana") {
-		h.metrics.WebhookRequestsTotal.WithLabelValues(endpoint, "401").Inc()
-		writeErrorResponse(w, requestID, http.StatusUnauthorized, "unauthorized", "Invalid or missing authentication", nil)
-		return
-	}
-
-	// Check body size
-	if r.ContentLength > h.cfg.MaxBodyBytes {
-		h.metrics.WebhookRequestsTotal.WithLabelValues(endpoint, "413").Inc()
-		writeErrorResponse(w, requestID, http.StatusRequestEntityTooLarge, "invalid_request", "Request body too large", nil)
-		return
-	}
-
-	// Parse JSON with limit
 	var payload map[string]interface{}
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&payload); err != nil {
-		h.metrics.WebhookRequestsTotal.WithLabelValues(endpoint, "400").Inc()
-		writeErrorResponse(w, requestID, http.StatusBadRequest, "invalid_request", "Invalid JSON", nil)
+	if !h.parseJSONBody(w, requestID, endpoint, r, &payload) {
 		return
 	}
 
-	// Check for trailing data
-	if decoder.More() {
-		h.metrics.WebhookRequestsTotal.WithLabelValues(endpoint, "400").Inc()
-		writeErrorResponse(w, requestID, http.StatusBadRequest, "invalid_request", "Trailing data after JSON object", nil)
-		return
-	}
-
-	// Convert to normalized request
-	grafanaReq := &models.GrafanaWebhookRequest{
-		RawPayload: payload,
-	}
-	if ruleName, ok := payload["ruleName"].(string); ok {
-		grafanaReq.RuleName = ruleName
-	}
-	if timestamp, ok := payload["timestamp"].(string); ok {
-		grafanaReq.Timestamp = timestamp
-	}
-	if evalMatches, ok := payload["evalMatches"].([]interface{}); ok {
-		for _, em := range evalMatches {
-			if emMap, ok := em.(map[string]interface{}); ok {
-				match := models.EvalMatch{}
-				if t, ok := emMap["time"].(string); ok {
-					match.Time = t
-				}
-				if v, ok := emMap["value"].(string); ok {
-					match.Value = v
-				}
-				if metric, ok := emMap["metric"].(map[string]interface{}); ok {
-					match.Metric = make(map[string]string)
-					for k, v := range metric {
-						if str, ok := v.(string); ok {
-							match.Metric[k] = str
-						}
-					}
-				}
-				grafanaReq.EvalMatches = append(grafanaReq.EvalMatches, match)
-			}
-		}
-	}
-	if tags, ok := payload["tags"].(map[string]interface{}); ok {
-		grafanaReq.Tags = make(map[string]string)
-		for k, v := range tags {
-			if str, ok := v.(string); ok {
-				grafanaReq.Tags[k] = str
-			}
-		}
-	}
-
+	grafanaReq := parseGrafanaPayload(payload)
 	webhookReq := grafanaReq.ToWebhookRequest()
-	if webhookReq.OccurredAt == "" {
-		h.metrics.WebhookRequestsTotal.WithLabelValues(endpoint, "422").Inc()
-		writeErrorResponse(w, requestID, http.StatusUnprocessableEntity, "invalid_request", "Missing timestamp",
-			[]models.ErrorDetail{{Field: "timestamp", Reason: "required"}})
-		return
-	}
-	if webhookReq.Service == "" {
-		h.metrics.WebhookRequestsTotal.WithLabelValues(endpoint, "422").Inc()
-		writeErrorResponse(w, requestID, http.StatusUnprocessableEntity, "invalid_request", "Missing service",
-			[]models.ErrorDetail{{Field: "service", Reason: "required (from tags.service)"}})
+
+	if !h.validateGrafanaRequest(w, requestID, endpoint, webhookReq) {
 		return
 	}
 
@@ -298,16 +346,7 @@ func (h *Handler) GrafanaWebhook(w http.ResponseWriter, r *http.Request) {
 	// Process event
 	eventID, duplicate, err := h.processEvent(r.Context(), requestID, "grafana", webhookReq, idempotencyKey)
 	if err != nil {
-		if err == utils.ErrStillProcessing || strings.Contains(err.Error(), "conflict") {
-			writeErrorResponse(w, requestID, http.StatusConflict, "conflict", "Idempotency key conflict: same key with different request",
-				[]models.ErrorDetail{{Field: "X-Idempotency-Key", Reason: "conflict: same key with different request"}})
-			return
-		}
-		if validationErr, ok := err.(*models.ValidationError); ok {
-			writeErrorResponse(w, requestID, http.StatusUnprocessableEntity, "invalid_request", "request validation failed", validationErr.Details)
-			return
-		}
-		writeErrorResponse(w, requestID, http.StatusInternalServerError, "internal_error", "Internal server error", nil)
+		h.handleProcessEventError(w, requestID, endpoint, err, idempotencyKey)
 		return
 	}
 
@@ -319,41 +358,12 @@ func (h *Handler) GenericWebhook(w http.ResponseWriter, r *http.Request) {
 	requestID := uuid.New().String()[:8]
 	endpoint := "generic"
 
-	// Check content type
-	if !validateContentType(r) {
-		h.metrics.WebhookRequestsTotal.WithLabelValues(endpoint, "415").Inc()
-		writeErrorResponse(w, requestID, http.StatusUnsupportedMediaType, "invalid_request", "Content-Type must be application/json", nil)
+	if !h.checkPreconditions(w, requestID, endpoint, r) {
 		return
 	}
 
-	// Check auth
-	if !h.validateAuth(r, "generic") {
-		h.metrics.WebhookRequestsTotal.WithLabelValues(endpoint, "401").Inc()
-		writeErrorResponse(w, requestID, http.StatusUnauthorized, "unauthorized", "Invalid or missing authentication", nil)
-		return
-	}
-
-	// Check body size
-	if r.ContentLength > h.cfg.MaxBodyBytes {
-		h.metrics.WebhookRequestsTotal.WithLabelValues(endpoint, "413").Inc()
-		writeErrorResponse(w, requestID, http.StatusRequestEntityTooLarge, "invalid_request", "Request body too large", nil)
-		return
-	}
-
-	// Parse JSON with limit
 	var req models.WebhookRequest
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&req); err != nil {
-		h.metrics.WebhookRequestsTotal.WithLabelValues(endpoint, "400").Inc()
-		writeErrorResponse(w, requestID, http.StatusBadRequest, "invalid_request", "Invalid JSON", nil)
-		return
-	}
-
-	// Check for trailing data
-	if decoder.More() {
-		h.metrics.WebhookRequestsTotal.WithLabelValues(endpoint, "400").Inc()
-		writeErrorResponse(w, requestID, http.StatusBadRequest, "invalid_request", "Trailing data after JSON object", nil)
+	if !h.parseJSONBody(w, requestID, endpoint, r, &req) {
 		return
 	}
 
@@ -363,16 +373,7 @@ func (h *Handler) GenericWebhook(w http.ResponseWriter, r *http.Request) {
 	// Process event
 	eventID, duplicate, err := h.processEvent(r.Context(), requestID, "generic", &req, idempotencyKey)
 	if err != nil {
-		if err == utils.ErrStillProcessing || strings.Contains(err.Error(), "conflict") {
-			writeErrorResponse(w, requestID, http.StatusConflict, "conflict", "Idempotency key conflict: same key with different request",
-				[]models.ErrorDetail{{Field: "X-Idempotency-Key", Reason: "conflict: same key with different request"}})
-			return
-		}
-		if validationErr, ok := err.(*models.ValidationError); ok {
-			writeErrorResponse(w, requestID, http.StatusUnprocessableEntity, "invalid_request", "request validation failed", validationErr.Details)
-			return
-		}
-		writeErrorResponse(w, requestID, http.StatusInternalServerError, "internal_error", "Internal server error", nil)
+		h.handleProcessEventError(w, requestID, endpoint, err, idempotencyKey)
 		return
 	}
 
