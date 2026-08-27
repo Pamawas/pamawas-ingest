@@ -201,7 +201,7 @@ func (h *Handler) validateGrafanaRequest(w http.ResponseWriter, requestID, endpo
 }
 
 // handleProcessEventError converts processEvent errors to HTTP responses
-func (h *Handler) handleProcessEventError(w http.ResponseWriter, requestID, endpoint string, err error, idempotencyKey string) {
+func (h *Handler) handleProcessEventError(w http.ResponseWriter, requestID string, err error, idempotencyKey string) {
 	if err == utils.ErrStillProcessing || strings.Contains(err.Error(), "conflict") {
 		writeErrorResponse(w, requestID, http.StatusConflict, "conflict", "Idempotency key conflict: same key with different request",
 			[]models.ErrorDetail{{Field: "X-Idempotency-Key", Reason: "conflict: same key with different request"}})
@@ -346,7 +346,7 @@ func (h *Handler) GrafanaWebhook(w http.ResponseWriter, r *http.Request) {
 	// Process event
 	eventID, duplicate, err := h.processEvent(r.Context(), requestID, "grafana", webhookReq, idempotencyKey)
 	if err != nil {
-		h.handleProcessEventError(w, requestID, endpoint, err, idempotencyKey)
+		h.handleProcessEventError(w, requestID, err, idempotencyKey)
 		return
 	}
 
@@ -373,7 +373,7 @@ func (h *Handler) GenericWebhook(w http.ResponseWriter, r *http.Request) {
 	// Process event
 	eventID, duplicate, err := h.processEvent(r.Context(), requestID, "generic", &req, idempotencyKey)
 	if err != nil {
-		h.handleProcessEventError(w, requestID, endpoint, err, idempotencyKey)
+		h.handleProcessEventError(w, requestID, err, idempotencyKey)
 		return
 	}
 
