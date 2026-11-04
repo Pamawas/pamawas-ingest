@@ -41,7 +41,9 @@ func setupTestDB(t *testing.T) *sql.DB {
 		dbURL = testingDB
 	}
 
-	return testutils.SetupTestDB(t, dbURL)
+	// Use pamawas-schema migrations directory
+	migrationsDir := "../../pamawas-schema/migrations"
+	return testutils.SetupTestDB(t, dbURL, migrationsDir)
 }
 
 func getenv(key, fallback string) string {

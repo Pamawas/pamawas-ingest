@@ -3,8 +3,8 @@ package testutils
 import (
 	"context"
 	"database/sql"
-	"embed"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -12,9 +12,6 @@ import (
 
 	_ "github.com/lib/pq"
 )
-
-//go:embed ../../migrations/*.sql
-var embeddedMigrations embed.FS
 
 type Migration struct {
 	Version string
@@ -26,9 +23,9 @@ type MigrationRunner struct {
 	migrations []Migration
 }
 
-func NewMigrationRunner(db *sql.DB) (*MigrationRunner, error) {
+func NewMigrationRunner(db *sql.DB, migrationsDir string) (*MigrationRunner, error) {
 	mr := &MigrationRunner{db: db}
-	migrations, err := mr.loadEmbeddedMigrations()
+	migrations, err := mr.loadMigrationsFromDir(migrationsDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load migrations: %w", err)
 	}
@@ -36,20 +33,22 @@ func NewMigrationRunner(db *sql.DB) (*MigrationRunner, error) {
 	return mr, nil
 }
 
-func (mr *MigrationRunner) loadEmbeddedMigrations() ([]Migration, error) {
-	entries, err := embeddedMigrations.ReadDir("migrations")
+func (mr *MigrationRunner) loadMigrationsFromDir(dir string) ([]Migration, error) {
+	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to read migrations directory %s: %w", dir, err)
 	}
 
 	var migrations []Migration
 	for _, entry := range entries {
-		if !strings.HasSuffix(entry.Name(), ".sql") {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
 			continue
 		}
-		content, err := embeddedMigrations.ReadFile(filepath.Join("migrations", entry.Name()))
+		path := filepath.Join(dir, entry.Name())
+		// #nosec G304 - path is constructed from controlled directory and filename
+		content, err := os.ReadFile(path)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to read migration %s: %w", path, err)
 		}
 		version := strings.TrimSuffix(entry.Name(), ".sql")
 		migrations = append(migrations, Migration{Version: version, SQL: string(content)})
@@ -144,7 +143,7 @@ func (mr *MigrationRunner) Run(ctx context.Context) error {
 }
 
 // SetupTestDB creates a test database and runs migrations
-func SetupTestDB(t interface{ Fatal(args ...interface{}) }, dbURL string) *sql.DB {
+func SetupTestDB(t interface{ Fatal(args ...interface{}) }, dbURL string, migrationsDir string) *sql.DB {
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
 		t.Fatal(err)
@@ -153,7 +152,7 @@ func SetupTestDB(t interface{ Fatal(args ...interface{}) }, dbURL string) *sql.D
 	ctx := context.Background()
 
 	// Run migrations
-	runner, err := NewMigrationRunner(db)
+	runner, err := NewMigrationRunner(db, migrationsDir)
 	if err != nil {
 		t.Fatal(err)
 	}
