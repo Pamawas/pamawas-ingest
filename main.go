@@ -131,7 +131,6 @@ func newRouter(h *handlers.Handler, cfg config.Config) *mux.Router {
 	apiV1 := r.PathPrefix("/api/v1").Subrouter()
 	apiV1.HandleFunc("/webhooks/grafana", h.GrafanaWebhook).Methods("POST")
 	apiV1.HandleFunc("/webhooks/generic", h.GenericWebhook).Methods("POST")
-	apiV1.Handle("/metrics", h.MetricsHandler())
 
 	r.HandleFunc("/healthz", h.HealthHandler).Methods("GET")
 	r.HandleFunc("/ready", h.ReadyHandler).Methods("GET")
