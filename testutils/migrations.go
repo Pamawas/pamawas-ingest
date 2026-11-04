@@ -76,8 +76,12 @@ func (mr *MigrationRunner) getAppliedMigrations(ctx context.Context) (map[string
 	if err != nil {
 		return make(map[string]bool), nil
 	}
-	//errcheck:ignore
-	defer rows.Close()
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			// Log but don't fail - best effort cleanup
+			_ = closeErr
+		}
+	}()
 
 	applied := make(map[string]bool)
 	for rows.Next() {
@@ -116,14 +120,16 @@ func (mr *MigrationRunner) Run(ctx context.Context) error {
 		}
 
 		if _, err := tx.ExecContext(ctx, migration.SQL); err != nil {
-			//errcheck:ignore
-			tx.Rollback()
+			if rbErr := tx.Rollback(); rbErr != nil {
+				return fmt.Errorf("failed to execute migration %s: %w (rollback failed: %v)", migration.Version, err, rbErr)
+			}
 			return fmt.Errorf("failed to execute migration %s: %w", migration.Version, err)
 		}
 
 		if _, err := tx.ExecContext(ctx, "INSERT INTO schema_migrations (version) VALUES ($1)", migration.Version); err != nil {
-			//errcheck:ignore
-			tx.Rollback()
+			if rbErr := tx.Rollback(); rbErr != nil {
+				return fmt.Errorf("failed to record migration %s: %w (rollback failed: %v)", migration.Version, err, rbErr)
+			}
 			return fmt.Errorf("failed to record migration %s: %w", migration.Version, err)
 		}
 
