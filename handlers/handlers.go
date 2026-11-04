@@ -201,7 +201,7 @@ func (h *Handler) validateGrafanaRequest(w http.ResponseWriter, requestID, endpo
 }
 
 // handleProcessEventError converts processEvent errors to HTTP responses
-func (h *Handler) handleProcessEventError(w http.ResponseWriter, requestID string, err error, idempotencyKey string) {
+func (h *Handler) handleProcessEventError(w http.ResponseWriter, requestID string, err error, _ string) {
 	if err == utils.ErrStillProcessing || strings.Contains(err.Error(), "conflict") {
 		writeErrorResponse(w, requestID, http.StatusConflict, "conflict", "Idempotency key conflict: same key with different request",
 			[]models.ErrorDetail{{Field: "X-Idempotency-Key", Reason: "conflict: same key with different request"}})
