@@ -1,33 +1,24 @@
 # Use the official Golang image to build the application
 FROM golang:1.27-alpine AS builder
 
-# Set the working directory inside the container
 WORKDIR /app
 
-# Copy go.mod and go.sum files
-COPY go.mod ./
-RUN go mod download 2>/dev/null || true
+COPY go.mod go.sum ./
+RUN go mod download
 
-# Copy the source code
 COPY . .
 
-# Build the application
-RUN go build -o main .
+ARG VERSION=dev
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /pamawas-ingest .
 
-# Use a minimal alpine image to run the application
 FROM alpine:latest
 
-# Install ca-certificates for HTTPS calls
 RUN apk --no-cache add ca-certificates
 
-# Set the working directory
-WORKDIR /root/
+WORKDIR /app
 
-# Copy the pre-built binary from the builder stage
-COPY --from=builder /app/main .
+COPY --from=builder /pamawas-ingest .
 
-# Expose port 8080 (adjust as needed)
 EXPOSE 8080
 
-# Command to run the executable
-CMD ["./main"]
+CMD ["./pamawas-ingest"]
