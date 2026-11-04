@@ -1,8 +1,32 @@
 package main
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"testing"
+
+	"github.com/gorilla/mux"
+
+	"github.com/Pamawas/pamawas-ingest/config"
 )
+
+func TestHealthRoutes(t *testing.T) {
+	router := newRouter(nil, config.Config{})
+
+	for _, path := range []string{
+		"/healthz",
+		"/ready",
+		"/metrics",
+	} {
+		t.Run(path, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, path, nil)
+			match := &mux.RouteMatch{}
+			if !router.Match(request, match) {
+				t.Fatalf("GET %s did not match a route", path)
+			}
+		})
+	}
+}
 
 // TestGrafanaWebhookHandler is a placeholder test for the grafana webhook handler.
 func TestGrafanaWebhookHandler(t *testing.T) {
