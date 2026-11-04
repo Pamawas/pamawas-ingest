@@ -22,6 +22,7 @@ import (
 	"github.com/Pamawas/pamawas-ingest/metrics"
 	"github.com/Pamawas/pamawas-ingest/middleware"
 	"github.com/Pamawas/pamawas-ingest/models"
+	"github.com/Pamawas/pamawas-ingest/testutils"
 )
 
 // TestHandler holds test dependencies
@@ -35,21 +36,12 @@ type TestHandler struct {
 // setupTestDB creates a test database and runs migrations
 func setupTestDB(t *testing.T) *sql.DB {
 	// Use test database from environment or default
-	dbURL := "postgres://pamawas:***@localhost:5432/pamawas_test?sslmode=disable"
+	dbURL := "postgres://pamawas:pamawas@localhost:5432/pamawas_test?sslmode=disable"
 	if testingDB := getenv("TEST_DATABASE_URL", ""); testingDB != "" {
 		dbURL = testingDB
 	}
 
-	db, err := sql.Open("postgres", dbURL)
-	require.NoError(t, err)
-
-	// Clean up tables before each test
-	_, err = db.Exec(`
-		TRUNCATE TABLE events, idempotency_records RESTART IDENTITY CASCADE;
-	`)
-	require.NoError(t, err)
-
-	return db
+	return testutils.SetupTestDB(t, dbURL)
 }
 
 func getenv(key, fallback string) string {
