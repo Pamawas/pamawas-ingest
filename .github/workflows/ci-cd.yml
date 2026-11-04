@@ -10,20 +10,6 @@ jobs:
   test:
     name: Run Tests
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: pamawas
-          POSTGRES_PASSWORD: pamawas
-          POSTGRES_DB: pamawas_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
@@ -37,37 +23,10 @@ jobs:
     - name: Download dependencies
       run: go mod download
 
-    - name: Checkout pamawas-schema for migrations
-      uses: actions/checkout@v4
-      with:
-        repository: Pamawas/pamawas-schema
-        path: pamawas-schema
-        ref: dev
-        token: ${{ secrets.GITHUB_TOKEN }}
-
-    - name: Wait for PostgreSQL
-      run: |
-        for i in {1..30}; do
-          pg_isready -h localhost -p 5432 && break
-          sleep 1
-        done
-
-    - name: Run migrations
-      run: |
-        echo "=== Listing migration files ==="
-        ls -la pamawas-schema/migrations/
-        echo "=== Running migrations ==="
-        for f in pamawas-schema/migrations/*.sql; do
-          echo "Running $f"
-          psql "postgres://pamawas:pamawas@localhost:5432/pamawas_test?sslmode=disable" -f "$f"
-        done
-        echo "=== Verifying tables ==="
-        psql "postgres://pamawas:pamawas@localhost:5432/pamawas_test?sslmode=disable" -c "\dt"
-
     - name: Run unit tests
-      run: go test -p 1 -v -race -coverprofile=coverage.out ./...
+      run: go test -v -race -coverprofile=coverage.out ./...
       env:
-        TEST_DATABASE_URL: postgres://pamawas:pamawas@localhost:5432/pamawas_test?sslmode=disable
+        TEST_DATABASE_URL: ${{ secrets.TEST_DATABASE_URL }}
 
     - name: Upload coverage
       uses: codecov/codecov-action@v4
@@ -80,6 +39,7 @@ jobs:
       uses: golangci/golangci-lint-action@v7
       with:
         install-mode: 'goinstall'
+        version: v2.13.2
         args: ./...
 
   build:
@@ -93,7 +53,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
-        go-version: '1.26.6'
+        go-version: '1.27'
         cache: true
 
     - name: Download dependencies
@@ -146,6 +106,7 @@ jobs:
       uses: docker/build-push-action@v5
       with:
         context: .
+        file: Dockerfile
         push: true
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
