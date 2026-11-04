@@ -94,19 +94,15 @@ func main() {
 	r.Use(middleware.ErrorLoggingMiddleware("pamawas-ingest"))
 	r.Use(middleware.BodyLimitMiddleware(cfg.MaxBodyBytes))
 
-	// V1 API endpoints
-	v1 := r.PathPrefix("/v1").Subrouter()
-	v1.HandleFunc("/webhooks/grafana", h.GrafanaWebhook).Methods("POST")
-	v1.HandleFunc("/webhooks/generic", h.GenericWebhook).Methods("POST")
+	// V1 API endpoints under /api/v1
+	apiV1 := r.PathPrefix("/api/v1").Subrouter()
+	apiV1.HandleFunc("/webhooks/grafana", h.GrafanaWebhook).Methods("POST")
+	apiV1.HandleFunc("/webhooks/generic", h.GenericWebhook).Methods("POST")
 
-	// Legacy endpoints (transitional, to be removed after migration)
-	r.HandleFunc("/webhook/grafana", h.GrafanaWebhook).Methods("POST")
-	r.HandleFunc("/webhook/generic", h.GenericWebhook).Methods("POST")
-
-	// Health and metrics
-	r.HandleFunc("/healthz", h.HealthHandler).Methods("GET")
-	r.HandleFunc("/ready", h.ReadyHandler).Methods("GET")
-	r.Handle("/metrics", h.MetricsHandler())
+	// Health and metrics under /api/v1
+	apiV1.HandleFunc("/healthz", h.HealthHandler).Methods("GET")
+	apiV1.HandleFunc("/ready", h.ReadyHandler).Methods("GET")
+	apiV1.Handle("/metrics", h.MetricsHandler())
 
 	// Create server
 	srv := &http.Server{
