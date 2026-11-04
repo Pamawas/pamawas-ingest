@@ -41,8 +41,8 @@ func setupTestDB(t *testing.T) *sql.DB {
 		dbURL = testingDB
 	}
 
-	// Use pamawas-schema migrations directory
-	migrationsDir := "../../pamawas-schema/migrations"
+	// Use local migrations directory (copied from pamawas-schema)
+	migrationsDir := "./migrations"
 	return testutils.SetupTestDB(t, dbURL, migrationsDir)
 }
 
