@@ -26,25 +26,25 @@ func Load() Config {
 	v.SetEnvPrefix("PAMAWAS_INGEST")
 	// Don't use AutomaticEnv() - Kubernetes injects PAMAWAS_INGEST_PORT=tcp://IP:PORT
 	// which would override our config. Explicitly bind only what we need.
-	if err := v.BindEnv("database_url", "DATABASE_URL"); err != nil {
+	if err := v.BindEnv("database_url", "DATABASE_URL", "PAMAWAS_INGEST_DATABASE_URL"); err != nil {
 		panic(fmt.Sprintf("failed to bind DATABASE_URL env: %v", err))
 	}
-	if err := v.BindEnv("port", "PORT"); err != nil {
+	if err := v.BindEnv("port", "PORT", "PAMAWAS_INGEST_PORT"); err != nil {
 		panic(fmt.Sprintf("failed to bind PORT env: %v", err))
 	}
-	if err := v.BindEnv("log_level", "LOG_LEVEL"); err != nil {
+	if err := v.BindEnv("log_level", "LOG_LEVEL", "PAMAWAS_INGEST_LOG_LEVEL"); err != nil {
 		panic(fmt.Sprintf("failed to bind LOG_LEVEL env: %v", err))
 	}
-	if err := v.BindEnv("environment", "ENVIRONMENT"); err != nil {
+	if err := v.BindEnv("environment", "ENVIRONMENT", "PAMAWAS_INGEST_ENVIRONMENT"); err != nil {
 		panic(fmt.Sprintf("failed to bind ENVIRONMENT env: %v", err))
 	}
 	if err := v.BindEnv("webhook_token", "PAMAWAS_WEBHOOK_TOKEN"); err != nil {
 		panic(fmt.Sprintf("failed to bind PAMAWAS_WEBHOOK_TOKEN env: %v", err))
 	}
-	if err := v.BindEnv("max_body_bytes", "MAX_BODY_BYTES"); err != nil {
+	if err := v.BindEnv("max_body_bytes", "MAX_BODY_BYTES", "PAMAWAS_INGEST_MAX_BODY_BYTES"); err != nil {
 		panic(fmt.Sprintf("failed to bind MAX_BODY_BYTES env: %v", err))
 	}
-	if err := v.BindEnv("test_mode", "TEST_MODE"); err != nil {
+	if err := v.BindEnv("test_mode", "TEST_MODE", "PAMAWAS_INGEST_TEST_MODE"); err != nil {
 		panic(fmt.Sprintf("failed to bind TEST_MODE env: %v", err))
 	}
 
