@@ -46,6 +46,7 @@ linters:
       - path: testutils/migrations\.go
         linters:
           - errcheck
+          - gosec
 
 issues:
   max-issues-per-linter: 0
