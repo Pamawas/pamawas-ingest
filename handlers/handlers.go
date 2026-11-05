@@ -133,55 +133,72 @@ func parseGrafanaPayload(payload map[string]interface{}) *models.GrafanaWebhookR
 	}
 
 	// Custom payload fields (Grafana 12+)
-	if ruleName, ok := payload["ruleName"].(string); ok {
-		grafanaReq.RuleName = ruleName
-	}
-	if timestamp, ok := payload["timestamp"].(string); ok {
-		grafanaReq.Timestamp = timestamp
-	}
-	if evalMatches, ok := payload["evalMatches"].([]interface{}); ok {
-		grafanaReq.EvalMatches = parseEvalMatches(evalMatches)
-	}
-	if tags, ok := payload["tags"].(map[string]interface{}); ok {
-		grafanaReq.Tags = parseTags(tags)
-	}
+	extractCustomPayload(payload, grafanaReq)
 
 	// Default payload fallback: extract from alerts array
-	if grafanaReq.Timestamp == "" || grafanaReq.RuleName == "" || grafanaReq.Tags == nil {
-		if rawAlerts, ok := payload["alerts"].([]interface{}); ok && len(rawAlerts) > 0 {
-			if firstAlert, ok := rawAlerts[0].(map[string]interface{}); ok {
-				// Timestamp from startsAt
-				if grafanaReq.Timestamp == "" {
-					if startsAt, ok := firstAlert["startsAt"].(string); ok {
-						grafanaReq.Timestamp = startsAt
-					}
-				}
-				// RuleName/Title from labels.alertname or annotations.summary
-				if grafanaReq.RuleName == "" {
-					if labels, ok := firstAlert["labels"].(map[string]interface{}); ok {
-						if alertName, ok := labels["alertname"].(string); ok {
-							grafanaReq.RuleName = alertName
-						}
-					}
-					if grafanaReq.RuleName == "" {
-						if annotations, ok := firstAlert["annotations"].(map[string]interface{}); ok {
-							if summary, ok := annotations["summary"].(string); ok {
-								grafanaReq.RuleName = summary
-							}
-						}
-					}
-				}
-				// Tags from labels (service, severity, etc.)
-				if grafanaReq.Tags == nil {
-					if labels, ok := firstAlert["labels"].(map[string]interface{}); ok {
-						grafanaReq.Tags = parseTags(labels)
-					}
+	extractFromAlerts(payload, grafanaReq)
+
+	return grafanaReq
+}
+
+// extractCustomPayload extracts fields from Grafana 12+ custom payload format
+func extractCustomPayload(payload map[string]interface{}, req *models.GrafanaWebhookRequest) {
+	if ruleName, ok := payload["ruleName"].(string); ok {
+		req.RuleName = ruleName
+	}
+	if timestamp, ok := payload["timestamp"].(string); ok {
+		req.Timestamp = timestamp
+	}
+	if evalMatches, ok := payload["evalMatches"].([]interface{}); ok {
+		req.EvalMatches = parseEvalMatches(evalMatches)
+	}
+	if tags, ok := payload["tags"].(map[string]interface{}); ok {
+		req.Tags = parseTags(tags)
+	}
+}
+
+// extractFromAlerts extracts missing fields from the alerts array (default payload format)
+func extractFromAlerts(payload map[string]interface{}, req *models.GrafanaWebhookRequest) {
+	if req.Timestamp != "" && req.RuleName != "" && req.Tags != nil {
+		return
+	}
+
+	rawAlerts, ok := payload["alerts"].([]interface{})
+	if !ok || len(rawAlerts) == 0 {
+		return
+	}
+
+	firstAlert, ok := rawAlerts[0].(map[string]interface{})
+	if !ok {
+		return
+	}
+
+	if req.Timestamp == "" {
+		if startsAt, ok := firstAlert["startsAt"].(string); ok {
+			req.Timestamp = startsAt
+		}
+	}
+
+	if req.RuleName == "" {
+		if labels, ok := firstAlert["labels"].(map[string]interface{}); ok {
+			if alertName, ok := labels["alertname"].(string); ok {
+				req.RuleName = alertName
+			}
+		}
+		if req.RuleName == "" {
+			if annotations, ok := firstAlert["annotations"].(map[string]interface{}); ok {
+				if summary, ok := annotations["summary"].(string); ok {
+					req.RuleName = summary
 				}
 			}
 		}
 	}
 
-	return grafanaReq
+	if req.Tags == nil {
+		if labels, ok := firstAlert["labels"].(map[string]interface{}); ok {
+			req.Tags = parseTags(labels)
+		}
+	}
 }
 
 // parseEvalMatches extracts eval matches from Grafana payload
