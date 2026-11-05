@@ -232,6 +232,9 @@ func (g *GrafanaWebhookRequest) ToWebhookRequest() *WebhookRequest {
 	if g.Tags != nil {
 		service = g.Tags["service"]
 	}
+	if service == "" {
+		service = "grafana"
+	}
 
 	severity := "warning"
 	if g.Tags != nil {
