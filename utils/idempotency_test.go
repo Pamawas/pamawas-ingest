@@ -28,8 +28,10 @@ func TestCheckIdempotency(t *testing.T) {
 	}
 	defer db.Close()
 
-	// Ensure table exists
-	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS idempotency_records (
+	// Ensure clean table
+	_, err = db.Exec(`DROP TABLE IF EXISTS idempotency_records;`)
+	require.NoError(t, err)
+	_, err = db.Exec(`CREATE TABLE idempotency_records (
 		id SERIAL PRIMARY KEY,
 		audience TEXT NOT NULL,
 		caller TEXT NOT NULL,
@@ -103,8 +105,10 @@ func TestCompleteIdempotency(t *testing.T) {
 	}
 	defer db.Close()
 
-	// Ensure table exists
-	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS idempotency_records (
+	// Ensure clean table
+	_, err = db.Exec(`DROP TABLE IF EXISTS idempotency_records;`)
+	require.NoError(t, err)
+	_, err = db.Exec(`CREATE TABLE idempotency_records (
 		id SERIAL PRIMARY KEY,
 		audience TEXT NOT NULL,
 		caller TEXT NOT NULL,
