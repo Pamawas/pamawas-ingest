@@ -92,21 +92,7 @@ func main() {
 	// Initialize handlers
 	h := handlers.NewHandler(db, cfg, m)
 
-	// Create router with middleware
-	r := mux.NewRouter()
-	r.Use(middleware.LoggingMiddleware("pamawas-ingest"))
-	r.Use(middleware.ErrorLoggingMiddleware("pamawas-ingest"))
-	r.Use(middleware.BodyLimitMiddleware(cfg.MaxBodyBytes))
-
-	// V1 API endpoints under /api/v1
-	apiV1 := r.PathPrefix("/api/v1").Subrouter()
-	apiV1.HandleFunc("/webhooks/grafana", h.GrafanaWebhook).Methods("POST")
-	apiV1.HandleFunc("/webhooks/generic", h.GenericWebhook).Methods("POST")
-
-	// Health and metrics under /api/v1
-	apiV1.HandleFunc("/healthz", h.HealthHandler).Methods("GET")
-	apiV1.HandleFunc("/ready", h.ReadyHandler).Methods("GET")
-	apiV1.Handle("/metrics", h.MetricsHandler())
+	r := newRouter(h, cfg)
 
 	// Create server
 	srv := &http.Server{
@@ -137,6 +123,23 @@ func main() {
 	}
 
 	log.Info().Msg("Server stopped gracefully")
+}
+
+func newRouter(h *handlers.Handler, cfg config.Config) *mux.Router {
+	r := mux.NewRouter()
+	r.Use(middleware.LoggingMiddleware("pamawas-ingest"))
+	r.Use(middleware.ErrorLoggingMiddleware("pamawas-ingest"))
+	r.Use(middleware.BodyLimitMiddleware(cfg.MaxBodyBytes))
+
+	apiV1 := r.PathPrefix("/api/v1").Subrouter()
+	apiV1.HandleFunc("/webhooks/grafana", h.GrafanaWebhook).Methods("POST")
+	apiV1.HandleFunc("/webhooks/generic", h.GenericWebhook).Methods("POST")
+
+	r.HandleFunc("/healthz", h.HealthHandler).Methods("GET")
+	r.HandleFunc("/ready", h.ReadyHandler).Methods("GET")
+	r.Handle("/metrics", h.MetricsHandler())
+
+	return r
 }
 
 func initLogger(cfg config.Config) {
