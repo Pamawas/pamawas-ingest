@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog/log"
 
@@ -343,15 +344,46 @@ func (h *Handler) processEvent(ctx context.Context, requestID, source string, re
 		log.Error().Err(err).Str("event_id", eventID).Msg("Error marshaling raw payload")
 		return "", false, err
 	}
+	var sourceEventID *string
+	if event.SourceEventID != "" {
+		sourceEventID = &event.SourceEventID
+	}
+	var fingerprintVal *string
+	if event.Fingerprint != "" {
+		fingerprintVal = &event.Fingerprint
+	}
+
 	_, err = h.db.ExecContext(ctx,
 		`INSERT INTO events (id, source, source_event_id, fingerprint, type, occurred_at, service, environment, severity, title, status, labels, raw_payload, schema_version)
 		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
-		event.ID, event.Source, event.SourceEventID, event.Fingerprint, event.Type, event.OccurredAt,
+		event.ID, event.Source, sourceEventID, fingerprintVal, event.Type, event.OccurredAt,
 		event.Service, event.Environment, event.Severity, event.Title, event.Status, labelsJSON, rawPayloadJSON, event.SchemaVersion,
 	)
 	h.metrics.DBWriteDuration.Observe(time.Since(dbStart).Seconds())
 
 	if err != nil {
+		if isUniqueViolation(err) {
+			var existingID string
+			var queryErr error
+			if event.SourceEventID != "" {
+				queryErr = h.db.QueryRowContext(ctx, "SELECT id FROM events WHERE source = $1 AND source_event_id = $2", event.Source, event.SourceEventID).Scan(&existingID)
+			} else if event.Fingerprint != "" {
+				queryErr = h.db.QueryRowContext(ctx, "SELECT id FROM events WHERE source = $1 AND fingerprint = $2 AND occurred_at = $3", event.Source, event.Fingerprint, event.OccurredAt).Scan(&existingID)
+			}
+			if queryErr == nil && existingID != "" {
+				_ = utils.CompleteIdempotency(h.db, "ingest", source, ikey, existingID)
+				h.metrics.EventsProcessedTotal.Inc()
+				h.metrics.WebhookRequestsTotal.WithLabelValues(endpoint, "200").Inc()
+				h.metrics.WebhookRequestDuration.WithLabelValues(endpoint).Observe(time.Since(start).Seconds())
+				log.Info().
+					Str("event_id", existingID).
+					Str("service", event.Service).
+					Str("title", event.Title).
+					Bool("duplicate", true).
+					Msg("Duplicate event recognized via unique constraint")
+				return existingID, true, nil
+			}
+		}
 		h.metrics.WebhookRequestsTotal.WithLabelValues(endpoint, "500").Inc()
 		log.Error().Err(err).Str("event_id", eventID).Msg("Error inserting event")
 		return "", false, err
@@ -495,4 +527,15 @@ func (h *Handler) ReadyHandler(w http.ResponseWriter, r *http.Request) {
 // MetricsHandler returns the Prometheus metrics handler
 func (h *Handler) MetricsHandler() http.Handler {
 	return promhttp.Handler()
+}
+
+func isUniqueViolation(err error) bool {
+	if err == nil {
+		return false
+	}
+	if pqErr, ok := err.(*pq.Error); ok && pqErr.Code == "23505" {
+		return true
+	}
+	errMsg := err.Error()
+	return strings.Contains(errMsg, "unique constraint") || strings.Contains(errMsg, "duplicate key")
 }
