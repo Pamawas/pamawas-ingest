@@ -230,6 +230,9 @@ func parseEvalMatches(evalMatches []interface{}) []models.EvalMatch {
 // parseTags extracts tags from Grafana payload
 func parseTags(tags map[string]interface{}) map[string]string {
 	result := make(map[string]string)
+	if tags == nil {
+		return result
+	}
 	for k, v := range tags {
 		if str, ok := v.(string); ok {
 			result[k] = str
