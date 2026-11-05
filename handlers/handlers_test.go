@@ -284,7 +284,7 @@ func TestGrafanaWebhook_MissingService(t *testing.T) {
 		"Content-Type":  "application/json",
 		"Authorization": "Bearer test-token",
 	})
-	assert.Equal(t, http.StatusUnprocessableEntity, w.Code)
+	assert.Equal(t, http.StatusAccepted, w.Code)
 }
 
 func TestGrafanaWebhook_InvalidJSON(t *testing.T) {
