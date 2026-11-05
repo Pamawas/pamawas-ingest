@@ -31,14 +31,17 @@ func TestCheckIdempotency(t *testing.T) {
 	// Ensure table exists
 	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS idempotency_records (
 		id SERIAL PRIMARY KEY,
-		source TEXT NOT NULL,
-		component TEXT NOT NULL,
-		idempotency_key TEXT NOT NULL,
-		event_id TEXT,
+		audience TEXT NOT NULL,
+		caller TEXT NOT NULL,
+		key_hash TEXT NOT NULL,
+		request_hash TEXT NOT NULL,
 		status TEXT NOT NULL DEFAULT 'processing',
+		result_reference TEXT,
 		payload TEXT,
 		created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-		updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+		updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+		expires_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+		UNIQUE (audience, caller, key_hash)
 	);`)
 	require.NoError(t, err)
 
@@ -99,6 +102,23 @@ func TestCompleteIdempotency(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
+
+	// Ensure table exists
+	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS idempotency_records (
+		id SERIAL PRIMARY KEY,
+		audience TEXT NOT NULL,
+		caller TEXT NOT NULL,
+		key_hash TEXT NOT NULL,
+		request_hash TEXT NOT NULL,
+		status TEXT NOT NULL DEFAULT 'processing',
+		result_reference TEXT,
+		payload TEXT,
+		created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+		updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+		expires_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+		UNIQUE (audience, caller, key_hash)
+	);`)
+	require.NoError(t, err)
 
 	_, err = db.Exec(`TRUNCATE TABLE idempotency_records RESTART IDENTITY CASCADE;`)
 	require.NoError(t, err)
