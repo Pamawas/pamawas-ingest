@@ -148,38 +148,33 @@ func parseGrafanaPayload(payload map[string]interface{}) *models.GrafanaWebhookR
 
 	// Default payload fallback: extract from alerts array
 	if grafanaReq.Timestamp == "" || grafanaReq.RuleName == "" || grafanaReq.Tags == nil {
-		alerts, _ := payload["alerts"].([]interface{})
-		if len(alerts) > 0 {
-			firstAlert, _ := alerts[0].(map[string]interface{})
-			// Timestamp from startsAt
-			if grafanaReq.Timestamp == "" {
-				if startsAt, ok := firstAlert["startsAt"].(string); ok {
-					grafanaReq.Timestamp = startsAt
-				}
-			}
-			// RuleName/Title from labels.alertname or annotations.summary
-			if grafanaReq.RuleName == "" {
-				if labels, ok := firstAlert["labels"].(map[string]interface{}); ok {
-					if alertName, ok := labels["alertname"].(string); ok {
-						grafanaReq.RuleName = alertName
+		if rawAlerts, ok := payload["alerts"].([]interface{}); ok && len(rawAlerts) > 0 {
+			if firstAlert, ok := rawAlerts[0].(map[string]interface{}); ok {
+				// Timestamp from startsAt
+				if grafanaReq.Timestamp == "" {
+					if startsAt, ok := firstAlert["startsAt"].(string); ok {
+						grafanaReq.Timestamp = startsAt
 					}
 				}
+				// RuleName/Title from labels.alertname or annotations.summary
 				if grafanaReq.RuleName == "" {
-					if annotations, ok := firstAlert["annotations"].(map[string]interface{}); ok {
-						if summary, ok := annotations["summary"].(string); ok {
-							grafanaReq.RuleName = summary
+					if labels, ok := firstAlert["labels"].(map[string]interface{}); ok {
+						if alertName, ok := labels["alertname"].(string); ok {
+							grafanaReq.RuleName = alertName
+						}
+					}
+					if grafanaReq.RuleName == "" {
+						if annotations, ok := firstAlert["annotations"].(map[string]interface{}); ok {
+							if summary, ok := annotations["summary"].(string); ok {
+								grafanaReq.RuleName = summary
+							}
 						}
 					}
 				}
-			}
-			// Tags from labels (service, severity, etc.)
-			if grafanaReq.Tags == nil {
-				grafanaReq.Tags = make(map[string]string)
-				if labels, ok := firstAlert["labels"].(map[string]interface{}); ok {
-					for k, v := range labels {
-						if str, ok := v.(string); ok {
-							grafanaReq.Tags[k] = str
-						}
+				// Tags from labels (service, severity, etc.)
+				if grafanaReq.Tags == nil {
+					if labels, ok := firstAlert["labels"].(map[string]interface{}); ok {
+						grafanaReq.Tags = parseTags(labels)
 					}
 				}
 			}
