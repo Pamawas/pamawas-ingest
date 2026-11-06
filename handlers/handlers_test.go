@@ -798,11 +798,28 @@ func TestDBRollback(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/webhooks/generic", strings.NewReader(`{"title":"test rollback","source":"generic","occurred_at":"2026-08-16T01:47:00Z"}`))
+	validBody := `{
+		"schema_version": 1,
+		"type": "event",
+		"occurred_at": "2026-08-16T01:47:00Z",
+		"service": "payment-api",
+		"environment": "production",
+		"severity": "high",
+		"title": "test rollback",
+		"status": "firing"
+	}`
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/webhooks/generic", strings.NewReader(validBody))
 	req.Header.Set("Content-Type", "application/json")
 	req = req.WithContext(ctx)
 	w := httptest.NewRecorder()
 
 	th.GenericWebhook(w, req)
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
+
+	// Verify nothing was committed to the events table
+	var count int
+	err := db.QueryRow("SELECT COUNT(*) FROM events WHERE title = 'test rollback'").Scan(&count)
+	require.NoError(t, err)
+	assert.Equal(t, 0, count)
 }
