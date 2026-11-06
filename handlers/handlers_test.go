@@ -2,6 +2,7 @@ package handlers_test
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"net/http"
@@ -791,16 +792,16 @@ func TestDBRollback(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
-	h := NewHandler(db, nil)
+	th := newTestHandler(t, db)
 
 	// A canceled context forces the transaction to fail and execute rollback
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/webhooks/generic", strings.NewReader(`{"title":"test rollback","source":"generic","occurred_at":"2026-08-16T01:47:00Z"}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/webhooks/generic", strings.NewReader(`{"title":"test rollback","source":"generic","occurred_at":"2026-08-16T01:47:00Z"}`))
 	req = req.WithContext(ctx)
 	w := httptest.NewRecorder()
 
-	h.GenericWebhookHandler(w, req)
+	th.GenericWebhook(w, req)
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 }
