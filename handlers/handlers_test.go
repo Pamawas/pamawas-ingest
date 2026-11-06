@@ -791,9 +791,16 @@ func TestDBRollback(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
-	// Create a handler with a connection that will fail
-	// This is harder to test without a mock DB, so we'll skip the actual rollback test
-	// The important thing is that the handler uses transactions properly
-	// which is evident from the code structure
-	t.Skip("Requires mock database for rollback testing")
+	h := NewHandler(db, nil)
+
+	// A canceled context forces the transaction to fail and execute rollback
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/webhooks/generic", strings.NewReader(`{"title":"test rollback","source":"generic","occurred_at":"2026-08-16T01:47:00Z"}`))
+	req = req.WithContext(ctx)
+	w := httptest.NewRecorder()
+
+	h.GenericWebhookHandler(w, req)
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
 }
