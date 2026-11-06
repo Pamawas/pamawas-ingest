@@ -1,7 +1,6 @@
 package utils
 
 import (
-	"database/sql"
 	"os"
 	"testing"
 	"time"
@@ -9,47 +8,20 @@ import (
 	_ "github.com/lib/pq"
 
 	"github.com/Pamawas/pamawas-ingest/models"
+	"github.com/Pamawas/pamawas-ingest/testutils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // TestCheckIdempotency tests the idempotency checking logic
 func TestCheckIdempotency(t *testing.T) {
-	// This test requires a real database connection
-	// Run with TEST_DATABASE_URL set to a test database
-	dbURL := "postgres://pamawas:***@localhost:5432/pamawas_test?sslmode=disable"
+	dbURL := "postgres://pamawas:pamawas@localhost:5432/pamawas_test?sslmode=disable"
 	if testingDB := getenv("TEST_DATABASE_URL", ""); testingDB != "" {
 		dbURL = testingDB
 	}
 
-	db, err := sql.Open("postgres", dbURL)
-	if err != nil {
-		t.Fatal(err)
-	}
+	db := testutils.SetupTestDB(t, dbURL, "../migrations")
 	defer db.Close()
-
-	// Ensure clean table
-	_, err = db.Exec(`DROP TABLE IF EXISTS idempotency_records;`)
-	require.NoError(t, err)
-	_, err = db.Exec(`CREATE TABLE idempotency_records (
-		id SERIAL PRIMARY KEY,
-		audience TEXT NOT NULL,
-		caller TEXT NOT NULL,
-		key_hash TEXT NOT NULL,
-		request_hash TEXT NOT NULL,
-		status TEXT NOT NULL DEFAULT 'processing',
-		result_reference TEXT,
-		payload TEXT,
-		created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-		updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-		expires_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-		UNIQUE (audience, caller, key_hash)
-	);`)
-	require.NoError(t, err)
-
-	// Clean up
-	_, err = db.Exec(`TRUNCATE TABLE idempotency_records RESTART IDENTITY CASCADE;`)
-	require.NoError(t, err)
 
 	req := &models.WebhookRequest{
 		SchemaVersion: 1,
@@ -60,26 +32,29 @@ func TestCheckIdempotency(t *testing.T) {
 		Title:         "Test",
 	}
 
+	caller := "utils-check"
+	key := "test-key-check"
+
 	// First call - should create processing record
-	eventID, duplicate, conflict, err := CheckIdempotency(db, "ingest", "generic", "test-key-1", req)
+	eventID, duplicate, conflict, err := CheckIdempotency(db, "ingest", caller, key, req)
 	require.NoError(t, err)
 	assert.False(t, duplicate)
 	assert.False(t, conflict)
 	assert.Empty(t, eventID)
 
-	// Second call with same key and request - should return duplicate
-	eventID, duplicate, conflict, err = CheckIdempotency(db, "ingest", "generic", "test-key-1", req)
+	// Second call with same key and request - should return ErrStillProcessing
+	eventID, duplicate, conflict, err = CheckIdempotency(db, "ingest", caller, key, req)
 	assert.ErrorIs(t, err, ErrStillProcessing)
 	assert.False(t, duplicate)
 	assert.False(t, conflict)
 	assert.Empty(t, eventID)
 
 	// Complete the idempotency record
-	err = CompleteIdempotency(db, "ingest", "generic", "test-key-1", "evt_123")
+	err = CompleteIdempotency(db, "ingest", caller, key, "evt_123")
 	require.NoError(t, err)
 
 	// Third call - should return the completed event ID
-	eventID, duplicate, conflict, err = CheckIdempotency(db, "ingest", "generic", "test-key-1", req)
+	eventID, duplicate, conflict, err = CheckIdempotency(db, "ingest", caller, key, req)
 	require.NoError(t, err)
 	assert.True(t, duplicate)
 	assert.Equal(t, "evt_123", eventID)
@@ -87,45 +62,20 @@ func TestCheckIdempotency(t *testing.T) {
 	// Different request with same key - should conflict
 	req2 := *req
 	req2.Title = "Different"
-	eventID, duplicate, conflict, err = CheckIdempotency(db, "ingest", "generic", "test-key-1", &req2)
+	eventID, duplicate, conflict, err = CheckIdempotency(db, "ingest", caller, key, &req2)
 	require.NoError(t, err)
 	assert.True(t, conflict)
 }
 
 // TestCompleteIdempotency tests completing an idempotency record
 func TestCompleteIdempotency(t *testing.T) {
-	dbURL := "postgres://pamawas:***@localhost:5432/pamawas_test?sslmode=disable"
+	dbURL := "postgres://pamawas:pamawas@localhost:5432/pamawas_test?sslmode=disable"
 	if testingDB := getenv("TEST_DATABASE_URL", ""); testingDB != "" {
 		dbURL = testingDB
 	}
 
-	db, err := sql.Open("postgres", dbURL)
-	if err != nil {
-		t.Fatal(err)
-	}
+	db := testutils.SetupTestDB(t, dbURL, "../migrations")
 	defer db.Close()
-
-	// Ensure clean table
-	_, err = db.Exec(`DROP TABLE IF EXISTS idempotency_records;`)
-	require.NoError(t, err)
-	_, err = db.Exec(`CREATE TABLE idempotency_records (
-		id SERIAL PRIMARY KEY,
-		audience TEXT NOT NULL,
-		caller TEXT NOT NULL,
-		key_hash TEXT NOT NULL,
-		request_hash TEXT NOT NULL,
-		status TEXT NOT NULL DEFAULT 'processing',
-		result_reference TEXT,
-		payload TEXT,
-		created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-		updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-		expires_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-		UNIQUE (audience, caller, key_hash)
-	);`)
-	require.NoError(t, err)
-
-	_, err = db.Exec(`TRUNCATE TABLE idempotency_records RESTART IDENTITY CASCADE;`)
-	require.NoError(t, err)
 
 	req := &models.WebhookRequest{
 		SchemaVersion: 1,
@@ -136,12 +86,15 @@ func TestCompleteIdempotency(t *testing.T) {
 		Title:         "Test",
 	}
 
+	caller := "utils-complete"
+	key := "test-key-complete"
+
 	// Create processing record
-	_, _, _, err = CheckIdempotency(db, "ingest", "generic", "complete-key", req)
+	_, _, _, err := CheckIdempotency(db, "ingest", caller, key, req)
 	require.NoError(t, err)
 
 	// Complete it
-	err = CompleteIdempotency(db, "ingest", "generic", "complete-key", "evt_456")
+	err = CompleteIdempotency(db, "ingest", caller, key, "evt_456")
 	require.NoError(t, err)
 
 	// Verify it's completed
@@ -150,7 +103,7 @@ func TestCompleteIdempotency(t *testing.T) {
 	err = db.QueryRow(
 		`SELECT status, result_reference FROM idempotency_records
 		WHERE audience = $1 AND caller = $2 AND key_hash = $3`,
-		"ingest", "generic", ComputeKeyHash("complete-key")).Scan(&status, &resultRef)
+		"ingest", caller, ComputeKeyHash(key)).Scan(&status, &resultRef)
 	require.NoError(t, err)
 	assert.Equal(t, "completed", status)
 	assert.Equal(t, "evt_456", resultRef)
@@ -158,19 +111,16 @@ func TestCompleteIdempotency(t *testing.T) {
 
 // TestIdempotencyExpiration tests that expired records are treated as new
 func TestIdempotencyExpiration(t *testing.T) {
-	dbURL := "postgres://pamawas:***@localhost:5432/pamawas_test?sslmode=disable"
+	dbURL := "postgres://pamawas:pamawas@localhost:5432/pamawas_test?sslmode=disable"
 	if testingDB := getenv("TEST_DATABASE_URL", ""); testingDB != "" {
 		dbURL = testingDB
 	}
 
-	db, err := sql.Open("postgres", dbURL)
-	if err != nil {
-		t.Fatal(err)
-	}
+	db := testutils.SetupTestDB(t, dbURL, "../migrations")
 	defer db.Close()
 
-	_, err = db.Exec(`TRUNCATE TABLE idempotency_records RESTART IDENTITY CASCADE;`)
-	require.NoError(t, err)
+	caller := "utils-expire"
+	key := "expired-key"
 
 	req := &models.WebhookRequest{
 		SchemaVersion: 1,
@@ -182,23 +132,33 @@ func TestIdempotencyExpiration(t *testing.T) {
 	}
 
 	// Insert an expired record directly
-	keyHash := ComputeKeyHash("expired-key")
-	requestHash, _ := ComputeRequestHash(req)
-	_, err = db.Exec(
-		`INSERT INTO idempotency_records (audience, caller, key_hash, request_hash, status, result_reference, created_at, expires_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-		"ingest", "generic", keyHash, requestHash, "completed", "evt_old", time.Now().Add(-2*time.Hour), time.Now().Add(-1*time.Hour))
+	keyHash := ComputeKeyHash(key)
+	requestHash, err := ComputeRequestHash(req)
 	require.NoError(t, err)
 
-	// CheckIdempotency should create a new record since the old one is expired
-	eventID, duplicate, conflict, err := CheckIdempotency(db, "ingest", "generic", "expired-key", req)
+	_, err = db.Exec(`
+		INSERT INTO idempotency_records (audience, caller, key_hash, request_hash, status, result_reference, created_at, expires_at)
+		VALUES ($1, $2, $3, $4, $5, $6, now() - interval '1 hour', now() - interval '10 minutes')
+	`, "ingest", caller, keyHash, requestHash, IdempotencyStatusProcessing, "")
+	require.NoError(t, err)
+
+	// Should allow new request because the existing record is expired
+	eventID, duplicate, conflict, err := CheckIdempotency(db, "ingest", caller, key, req)
 	require.NoError(t, err)
 	assert.False(t, duplicate)
 	assert.False(t, conflict)
 	assert.Empty(t, eventID)
+
+	// Verify the record was updated with new expiration
+	var expiresAt time.Time
+	err = db.QueryRow(
+		`SELECT expires_at FROM idempotency_records
+		WHERE audience = $1 AND caller = $2 AND key_hash = $3`,
+		"ingest", caller, keyHash).Scan(&expiresAt)
+	require.NoError(t, err)
+	assert.True(t, expiresAt.After(time.Now()))
 }
 
-// getenv helper for tests
 func getenv(key, fallback string) string {
 	if value, ok := os.LookupEnv(key); ok {
 		return value

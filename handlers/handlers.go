@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -363,25 +364,8 @@ func (h *Handler) processEvent(ctx context.Context, requestID, source string, re
 
 	if err != nil {
 		if isUniqueViolation(err) {
-			var existingID string
-			var queryErr error
-			if event.SourceEventID != "" {
-				queryErr = h.db.QueryRowContext(ctx, "SELECT id FROM events WHERE source = $1 AND source_event_id = $2", event.Source, event.SourceEventID).Scan(&existingID)
-			} else if event.Fingerprint != "" {
-				queryErr = h.db.QueryRowContext(ctx, "SELECT id FROM events WHERE source = $1 AND fingerprint = $2 AND occurred_at = $3", event.Source, event.Fingerprint, event.OccurredAt).Scan(&existingID)
-			}
-			if queryErr == nil && existingID != "" {
-				_ = utils.CompleteIdempotency(h.db, "ingest", source, ikey, existingID)
-				h.metrics.EventsProcessedTotal.Inc()
-				h.metrics.WebhookRequestsTotal.WithLabelValues(endpoint, "200").Inc()
-				h.metrics.WebhookRequestDuration.WithLabelValues(endpoint).Observe(time.Since(start).Seconds())
-				log.Info().
-					Str("event_id", existingID).
-					Str("service", event.Service).
-					Str("title", event.Title).
-					Bool("duplicate", true).
-					Msg("Duplicate event recognized via unique constraint")
-				return existingID, true, nil
+			if existingID, duplicate, handleErr := h.handleUniqueViolation(ctx, endpoint, source, ikey, event, start); duplicate {
+				return existingID, true, handleErr
 			}
 		}
 		h.metrics.WebhookRequestsTotal.WithLabelValues(endpoint, "500").Inc()
@@ -529,11 +513,40 @@ func (h *Handler) MetricsHandler() http.Handler {
 	return promhttp.Handler()
 }
 
+func (h *Handler) handleUniqueViolation(ctx context.Context, endpoint, source, ikey string, event models.CommonEvent, start time.Time) (string, bool, error) {
+	var existingID string
+	var queryErr error
+	if event.SourceEventID != "" {
+		queryErr = h.db.QueryRowContext(ctx, "SELECT id FROM events WHERE source = $1 AND source_event_id = $2", event.Source, event.SourceEventID).Scan(&existingID)
+	} else if event.Fingerprint != "" {
+		queryErr = h.db.QueryRowContext(ctx, "SELECT id FROM events WHERE source = $1 AND fingerprint = $2 AND occurred_at = $3", event.Source, event.Fingerprint, event.OccurredAt).Scan(&existingID)
+	}
+	if queryErr != nil || existingID == "" {
+		return "", false, nil
+	}
+
+	if compErr := utils.CompleteIdempotency(h.db, "ingest", source, ikey, existingID); compErr != nil {
+		log.Warn().Err(compErr).Str("event_id", existingID).Msg("Failed to complete idempotency record for duplicate event")
+	}
+
+	h.metrics.EventsProcessedTotal.Inc()
+	h.metrics.WebhookRequestsTotal.WithLabelValues(endpoint, "200").Inc()
+	h.metrics.WebhookRequestDuration.WithLabelValues(endpoint).Observe(time.Since(start).Seconds())
+	log.Info().
+		Str("event_id", existingID).
+		Str("service", event.Service).
+		Str("title", event.Title).
+		Bool("duplicate", true).
+		Msg("Duplicate event recognized via unique constraint")
+	return existingID, true, nil
+}
+
 func isUniqueViolation(err error) bool {
 	if err == nil {
 		return false
 	}
-	if pqErr, ok := err.(*pq.Error); ok && pqErr.Code == "23505" {
+	var pqErr *pq.Error
+	if errors.As(err, &pqErr) && pqErr.Code == "23505" {
 		return true
 	}
 	errMsg := err.Error()
