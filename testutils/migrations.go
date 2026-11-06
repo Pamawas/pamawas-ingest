@@ -143,18 +143,10 @@ func (mr *MigrationRunner) Run(ctx context.Context) error {
 	return nil
 }
 
-// FindMigrationsDir locates the migrations directory by checking:
-// 1. MIGRATIONS_DIR environment variable
-// 2. Local relative paths (e.g. "../migrations", "./migrations")
-// 3. Sibling pamawas-schema repository (e.g. "../../pamawas-schema/migrations", "../pamawas-schema/migrations")
+// FindMigrationsDir locates the migrations directory by checking standard locations:
+// 1. Local relative paths (e.g. "../migrations", "./migrations") used in CI and standalone setups.
+// 2. Sibling pamawas-schema repository (e.g. "../../pamawas-schema/migrations", "../pamawas-schema/migrations") used in local development.
 func FindMigrationsDir() string {
-	if env := os.Getenv("MIGRATIONS_DIR"); env != "" {
-		cleaned := filepath.Clean(env)
-		// #nosec G703,G304 //nolint:gosec // Controlled test utility path
-		if fi, err := os.Stat(cleaned); err == nil && fi.IsDir() {
-			return cleaned
-		}
-	}
 	candidates := []string{
 		"../migrations",
 		"./migrations",
