@@ -799,6 +799,7 @@ func TestDBRollback(t *testing.T) {
 	cancel()
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/webhooks/generic", strings.NewReader(`{"title":"test rollback","source":"generic","occurred_at":"2026-08-16T01:47:00Z"}`))
+	req.Header.Set("Content-Type", "application/json")
 	req = req.WithContext(ctx)
 	w := httptest.NewRecorder()
 
