@@ -364,8 +364,8 @@ func (h *Handler) processEvent(ctx context.Context, requestID, source string, re
 
 	if err != nil {
 		if isUniqueViolation(err) {
-			if existingID, duplicate, handleErr := h.handleUniqueViolation(ctx, endpoint, source, ikey, event, start); duplicate {
-				return existingID, true, handleErr
+			if existingID, duplicate := h.handleUniqueViolation(ctx, endpoint, source, ikey, event, start); duplicate {
+				return existingID, true, nil
 			}
 		}
 		h.metrics.WebhookRequestsTotal.WithLabelValues(endpoint, "500").Inc()
@@ -513,7 +513,7 @@ func (h *Handler) MetricsHandler() http.Handler {
 	return promhttp.Handler()
 }
 
-func (h *Handler) handleUniqueViolation(ctx context.Context, endpoint, source, ikey string, event models.CommonEvent, start time.Time) (string, bool, error) {
+func (h *Handler) handleUniqueViolation(ctx context.Context, endpoint, source, ikey string, event models.CommonEvent, start time.Time) (string, bool) {
 	var existingID string
 	var queryErr error
 	if event.SourceEventID != "" {
@@ -522,7 +522,7 @@ func (h *Handler) handleUniqueViolation(ctx context.Context, endpoint, source, i
 		queryErr = h.db.QueryRowContext(ctx, "SELECT id FROM events WHERE source = $1 AND fingerprint = $2 AND occurred_at = $3", event.Source, event.Fingerprint, event.OccurredAt).Scan(&existingID)
 	}
 	if queryErr != nil || existingID == "" {
-		return "", false, nil
+		return "", false
 	}
 
 	if compErr := utils.CompleteIdempotency(h.db, "ingest", source, ikey, existingID); compErr != nil {
@@ -538,7 +538,7 @@ func (h *Handler) handleUniqueViolation(ctx context.Context, endpoint, source, i
 		Str("title", event.Title).
 		Bool("duplicate", true).
 		Msg("Duplicate event recognized via unique constraint")
-	return existingID, true, nil
+	return existingID, true
 }
 
 func isUniqueViolation(err error) bool {

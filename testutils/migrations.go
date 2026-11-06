@@ -149,8 +149,10 @@ func (mr *MigrationRunner) Run(ctx context.Context) error {
 // 3. Sibling pamawas-schema repository (e.g. "../../pamawas-schema/migrations", "../pamawas-schema/migrations")
 func FindMigrationsDir() string {
 	if env := os.Getenv("MIGRATIONS_DIR"); env != "" {
-		if fi, err := os.Stat(env); err == nil && fi.IsDir() {
-			return env
+		cleaned := filepath.Clean(env)
+		// #nosec G703,G304 //nolint:gosec // Controlled test utility path
+		if fi, err := os.Stat(cleaned); err == nil && fi.IsDir() {
+			return cleaned
 		}
 	}
 	candidates := []string{
