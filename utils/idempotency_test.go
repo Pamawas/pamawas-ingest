@@ -20,7 +20,7 @@ func TestCheckIdempotency(t *testing.T) {
 		dbURL = testingDB
 	}
 
-	db := testutils.SetupTestDB(t, dbURL, "../migrations")
+	db := testutils.SetupTestDB(t, dbURL, testutils.FindMigrationsDir())
 	defer db.Close()
 
 	req := &models.WebhookRequest{
@@ -74,7 +74,7 @@ func TestCompleteIdempotency(t *testing.T) {
 		dbURL = testingDB
 	}
 
-	db := testutils.SetupTestDB(t, dbURL, "../migrations")
+	db := testutils.SetupTestDB(t, dbURL, testutils.FindMigrationsDir())
 	defer db.Close()
 
 	req := &models.WebhookRequest{
@@ -116,7 +116,7 @@ func TestIdempotencyExpiration(t *testing.T) {
 		dbURL = testingDB
 	}
 
-	db := testutils.SetupTestDB(t, dbURL, "../migrations")
+	db := testutils.SetupTestDB(t, dbURL, testutils.FindMigrationsDir())
 	defer db.Close()
 
 	caller := "utils-expire"

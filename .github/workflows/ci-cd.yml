@@ -29,6 +29,19 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
+    - name: Checkout schema migrations
+      uses: actions/checkout@v4
+      with:
+        repository: Pamawas/pamawas-schema
+        path: pamawas-schema
+        sparse-checkout: |
+          migrations
+        sparse-checkout-cone-mode: false
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Copy schema migrations
+      run: cp -r pamawas-schema/migrations ./migrations
+
     - name: Set up Go
       uses: actions/setup-go@v5
       with:

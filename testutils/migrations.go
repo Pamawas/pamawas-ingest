@@ -143,6 +143,30 @@ func (mr *MigrationRunner) Run(ctx context.Context) error {
 	return nil
 }
 
+// FindMigrationsDir locates the migrations directory by checking:
+// 1. MIGRATIONS_DIR environment variable
+// 2. Local relative paths (e.g. "../migrations", "./migrations")
+// 3. Sibling pamawas-schema repository (e.g. "../../pamawas-schema/migrations", "../pamawas-schema/migrations")
+func FindMigrationsDir() string {
+	if env := os.Getenv("MIGRATIONS_DIR"); env != "" {
+		if fi, err := os.Stat(env); err == nil && fi.IsDir() {
+			return env
+		}
+	}
+	candidates := []string{
+		"../migrations",
+		"./migrations",
+		"../../pamawas-schema/migrations",
+		"../pamawas-schema/migrations",
+	}
+	for _, candidate := range candidates {
+		if fi, err := os.Stat(candidate); err == nil && fi.IsDir() {
+			return candidate
+		}
+	}
+	return "../migrations"
+}
+
 // SetupTestDB creates a test database and runs migrations
 func SetupTestDB(t interface{ Fatal(args ...interface{}) }, dbURL string, migrationsDir string) *sql.DB {
 	db, err := sql.Open("postgres", dbURL)
