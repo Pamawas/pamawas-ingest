@@ -194,7 +194,10 @@ func firstGrafanaAlert(payload map[string]interface{}) map[string]interface{} {
 	if !ok || len(alerts) == 0 {
 		return nil
 	}
-	alert, _ := alerts[0].(map[string]interface{})
+	alert, ok := alerts[0].(map[string]interface{})
+	if !ok {
+		return nil
+	}
 	return alert
 }
 
@@ -226,8 +229,10 @@ func alertTimestamp(alert map[string]interface{}, status string) string {
 			return endsAt
 		}
 	}
-	startsAt, _ := alert["startsAt"].(string)
-	return startsAt
+	if startsAt, ok := alert["startsAt"].(string); ok {
+		return startsAt
+	}
+	return ""
 }
 
 func extractAlertRuleName(alert map[string]interface{}, req *models.GrafanaWebhookRequest) {
