@@ -432,6 +432,27 @@ func TestGrafanaToWebhookRequest_DefaultSeverity(t *testing.T) {
 	assert.Equal(t, "warning", req.Severity, "Default severity should be warning")
 }
 
+func TestGrafanaToWebhookRequest_Status(t *testing.T) {
+	tests := []struct {
+		name       string
+		status     string
+		wantStatus string
+	}{
+		{name: "firing", status: "firing", wantStatus: "firing"},
+		{name: "legacy alerting", status: "alerting", wantStatus: "firing"},
+		{name: "resolved", status: "resolved", wantStatus: "resolved"},
+		{name: "legacy ok", status: "ok", wantStatus: "resolved"},
+		{name: "omitted defaults to firing", wantStatus: "firing"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := (&GrafanaWebhookRequest{Status: tt.status}).ToWebhookRequest()
+			assert.Equal(t, tt.wantStatus, req.Status)
+		})
+	}
+}
+
 func TestCommonEventOccurredAtParsing(t *testing.T) {
 	req := &WebhookRequest{
 		SchemaVersion: 1,

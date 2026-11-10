@@ -2,6 +2,7 @@ package models
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
 )
 
@@ -207,6 +208,8 @@ func (r *WebhookRequest) ToCommonEvent(source string, eventID string, fingerprin
 type GrafanaWebhookRequest struct {
 	RuleName    string                 `json:"ruleName"`
 	Timestamp   string                 `json:"timestamp,omitempty"`
+	Status      string                 `json:"status,omitempty"`
+	Fingerprint string                 `json:"fingerprint,omitempty"`
 	EvalMatches []EvalMatch            `json:"evalMatches,omitempty"`
 	Tags        map[string]string      `json:"tags,omitempty"`
 	RawPayload  map[string]interface{} `json:"-"`
@@ -258,6 +261,21 @@ func (g *GrafanaWebhookRequest) ToWebhookRequest() *WebhookRequest {
 			}
 		}
 	}
+	if g.Fingerprint != "" {
+		labels["grafana_fingerprint"] = g.Fingerprint
+	}
+
+	status := "firing"
+	switch strings.ToLower(strings.TrimSpace(g.Status)) {
+	case "alerting", "firing":
+		status = "firing"
+	case "ok", "resolved":
+		status = "resolved"
+	case "":
+		// Older/custom Grafana payloads may omit status.
+	default:
+		status = g.Status
+	}
 
 	return &WebhookRequest{
 		SchemaVersion: 1,
@@ -267,7 +285,7 @@ func (g *GrafanaWebhookRequest) ToWebhookRequest() *WebhookRequest {
 		Environment:   "production", // default, will be overridden by source config
 		Severity:      severity,
 		Title:         g.RuleName,
-		Status:        "firing",
+		Status:        status,
 		Labels:        labels,
 		RawPayload:    g.RawPayload,
 	}

@@ -148,6 +148,37 @@ func TestGrafanaWebhook_Success(t *testing.T) {
 	assert.Equal(t, 1, count)
 }
 
+func TestGrafanaWebhook_ResolvedStatus(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	th := newTestHandler(t, db)
+
+	payload := map[string]interface{}{
+		"ruleName":  "High CPU Usage",
+		"timestamp": "2026-08-16T01:52:00Z",
+		"status":    "resolved",
+		"state":     "ok",
+		"tags": map[string]interface{}{
+			"service":   "payment-api",
+			"severity":  "high",
+			"namespace": "payments",
+		},
+	}
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	w := th.makeRequest("POST", "/webhook/grafana", body, map[string]string{
+		"Content-Type":  "application/json",
+		"Authorization": "Bearer test-token",
+	})
+	require.Equal(t, http.StatusAccepted, w.Code)
+
+	var status string
+	err = db.QueryRow("SELECT status FROM events WHERE source = 'grafana'").Scan(&status)
+	require.NoError(t, err)
+	assert.Equal(t, "resolved", status)
+}
+
 func TestGrafanaWebhook_Duplicate_Retry(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()

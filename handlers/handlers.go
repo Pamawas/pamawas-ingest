@@ -151,6 +151,14 @@ func extractCustomPayload(payload map[string]interface{}, req *models.GrafanaWeb
 	if timestamp, ok := payload["timestamp"].(string); ok {
 		req.Timestamp = timestamp
 	}
+	if status, ok := payload["status"].(string); ok && status != "" {
+		req.Status = status
+	}
+	if req.Status == "" {
+		if state, ok := payload["state"].(string); ok {
+			req.Status = state
+		}
+	}
 	if evalMatches, ok := payload["evalMatches"].([]interface{}); ok {
 		req.EvalMatches = parseEvalMatches(evalMatches)
 	}
@@ -161,7 +169,7 @@ func extractCustomPayload(payload map[string]interface{}, req *models.GrafanaWeb
 
 // extractFromAlerts extracts missing fields from the alerts array (default payload format)
 func extractFromAlerts(payload map[string]interface{}, req *models.GrafanaWebhookRequest) {
-	if req.Timestamp != "" && req.RuleName != "" && req.Tags != nil {
+	if req.Timestamp != "" && req.RuleName != "" && req.Tags != nil && req.Status != "" && req.Fingerprint != "" {
 		return
 	}
 
@@ -175,9 +183,27 @@ func extractFromAlerts(payload map[string]interface{}, req *models.GrafanaWebhoo
 		return
 	}
 
+	if req.Status == "" {
+		if status, ok := firstAlert["status"].(string); ok {
+			req.Status = status
+		}
+	}
+	if req.Fingerprint == "" {
+		if fingerprint, ok := firstAlert["fingerprint"].(string); ok {
+			req.Fingerprint = fingerprint
+		}
+	}
+
 	if req.Timestamp == "" {
-		if startsAt, ok := firstAlert["startsAt"].(string); ok {
-			req.Timestamp = startsAt
+		if strings.EqualFold(strings.TrimSpace(req.Status), "resolved") || strings.EqualFold(strings.TrimSpace(req.Status), "ok") {
+			if endsAt, ok := firstAlert["endsAt"].(string); ok {
+				req.Timestamp = endsAt
+			}
+		}
+		if req.Timestamp == "" {
+			if startsAt, ok := firstAlert["startsAt"].(string); ok {
+				req.Timestamp = startsAt
+			}
 		}
 	}
 
