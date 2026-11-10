@@ -169,61 +169,87 @@ func extractCustomPayload(payload map[string]interface{}, req *models.GrafanaWeb
 
 // extractFromAlerts extracts missing fields from the alerts array (default payload format)
 func extractFromAlerts(payload map[string]interface{}, req *models.GrafanaWebhookRequest) {
-	if req.Timestamp != "" && req.RuleName != "" && req.Tags != nil && req.Status != "" && req.Fingerprint != "" {
+	if hasCompleteGrafanaFields(req) {
 		return
 	}
 
-	rawAlerts, ok := payload["alerts"].([]interface{})
-	if !ok || len(rawAlerts) == 0 {
+	alert := firstGrafanaAlert(payload)
+	if alert == nil {
 		return
 	}
 
-	firstAlert, ok := rawAlerts[0].(map[string]interface{})
-	if !ok {
-		return
-	}
+	extractAlertStatus(alert, req)
+	extractAlertFingerprint(alert, req)
+	extractAlertTimestamp(alert, req)
+	extractAlertRuleName(alert, req)
+	extractAlertTags(alert, req)
+}
 
+func hasCompleteGrafanaFields(req *models.GrafanaWebhookRequest) bool {
+	return req.Timestamp != "" && req.RuleName != "" && req.Tags != nil && req.Status != "" && req.Fingerprint != ""
+}
+
+func firstGrafanaAlert(payload map[string]interface{}) map[string]interface{} {
+	alerts, ok := payload["alerts"].([]interface{})
+	if !ok || len(alerts) == 0 {
+		return nil
+	}
+	alert, _ := alerts[0].(map[string]interface{})
+	return alert
+}
+
+func extractAlertStatus(alert map[string]interface{}, req *models.GrafanaWebhookRequest) {
 	if req.Status == "" {
-		if status, ok := firstAlert["status"].(string); ok {
+		if status, ok := alert["status"].(string); ok {
 			req.Status = status
 		}
 	}
+}
+
+func extractAlertFingerprint(alert map[string]interface{}, req *models.GrafanaWebhookRequest) {
 	if req.Fingerprint == "" {
-		if fingerprint, ok := firstAlert["fingerprint"].(string); ok {
+		if fingerprint, ok := alert["fingerprint"].(string); ok {
 			req.Fingerprint = fingerprint
 		}
 	}
+}
 
+func extractAlertTimestamp(alert map[string]interface{}, req *models.GrafanaWebhookRequest) {
 	if req.Timestamp == "" {
-		if strings.EqualFold(strings.TrimSpace(req.Status), "resolved") || strings.EqualFold(strings.TrimSpace(req.Status), "ok") {
-			if endsAt, ok := firstAlert["endsAt"].(string); ok {
-				req.Timestamp = endsAt
-			}
-		}
-		if req.Timestamp == "" {
-			if startsAt, ok := firstAlert["startsAt"].(string); ok {
-				req.Timestamp = startsAt
-			}
+		req.Timestamp = alertTimestamp(alert, req.Status)
+	}
+}
+
+func alertTimestamp(alert map[string]interface{}, status string) string {
+	if strings.EqualFold(strings.TrimSpace(status), "resolved") || strings.EqualFold(strings.TrimSpace(status), "ok") {
+		if endsAt, ok := alert["endsAt"].(string); ok && endsAt != "" {
+			return endsAt
 		}
 	}
+	startsAt, _ := alert["startsAt"].(string)
+	return startsAt
+}
 
+func extractAlertRuleName(alert map[string]interface{}, req *models.GrafanaWebhookRequest) {
 	if req.RuleName == "" {
-		if labels, ok := firstAlert["labels"].(map[string]interface{}); ok {
+		if labels, ok := alert["labels"].(map[string]interface{}); ok {
 			if alertName, ok := labels["alertname"].(string); ok {
 				req.RuleName = alertName
 			}
 		}
 		if req.RuleName == "" {
-			if annotations, ok := firstAlert["annotations"].(map[string]interface{}); ok {
+			if annotations, ok := alert["annotations"].(map[string]interface{}); ok {
 				if summary, ok := annotations["summary"].(string); ok {
 					req.RuleName = summary
 				}
 			}
 		}
 	}
+}
 
+func extractAlertTags(alert map[string]interface{}, req *models.GrafanaWebhookRequest) {
 	if req.Tags == nil {
-		if labels, ok := firstAlert["labels"].(map[string]interface{}); ok {
+		if labels, ok := alert["labels"].(map[string]interface{}); ok {
 			req.Tags = parseTags(labels)
 		}
 	}
