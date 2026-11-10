@@ -78,13 +78,9 @@ func newTestHandler(t *testing.T, db *sql.DB) *TestHandler {
 	r.Use(middleware.BodyLimitMiddleware(cfg.MaxBodyBytes))
 
 	// V1 API endpoints
-	v1 := r.PathPrefix("/v1").Subrouter()
+	v1 := r.PathPrefix("/api/v1").Subrouter()
 	v1.HandleFunc("/webhooks/grafana", h.GrafanaWebhook).Methods("POST")
 	v1.HandleFunc("/webhooks/generic", h.GenericWebhook).Methods("POST")
-
-	// Legacy endpoints (transitional, to be removed after migration)
-	r.HandleFunc("/webhook/grafana", h.GrafanaWebhook).Methods("POST")
-	r.HandleFunc("/webhook/generic", h.GenericWebhook).Methods("POST")
 
 	// Health and metrics
 	r.HandleFunc("/healthz", h.HealthHandler).Methods("GET")
@@ -127,7 +123,7 @@ func TestGrafanaWebhook_Success(t *testing.T) {
 	}
 	body, _ := json.Marshal(payload)
 
-	w := th.makeRequest("POST", "/webhook/grafana", body, map[string]string{
+	w := th.makeRequest("POST", "/api/v1/webhooks/grafana", body, map[string]string{
 		"Content-Type":  "application/json",
 		"Authorization": "Bearer test-token",
 	})
@@ -167,7 +163,7 @@ func TestGrafanaWebhook_ResolvedStatus(t *testing.T) {
 	body, err := json.Marshal(payload)
 	require.NoError(t, err)
 
-	w := th.makeRequest("POST", "/webhook/grafana", body, map[string]string{
+	w := th.makeRequest("POST", "/api/v1/webhooks/grafana", body, map[string]string{
 		"Content-Type":  "application/json",
 		"Authorization": "Bearer test-token",
 	})
@@ -203,7 +199,7 @@ func TestGrafanaWebhook_Duplicate_Retry(t *testing.T) {
 
 	// First request with idempotency key
 	idempotencyKey := "test-key-1"
-	w := th.makeRequest("POST", "/webhook/grafana", body, map[string]string{
+	w := th.makeRequest("POST", "/api/v1/webhooks/grafana", body, map[string]string{
 		"Content-Type":      "application/json",
 		"Authorization":     "Bearer test-token",
 		"X-Idempotency-Key": idempotencyKey,
@@ -215,7 +211,7 @@ func TestGrafanaWebhook_Duplicate_Retry(t *testing.T) {
 	eventID1 := resp1.Data.EventID
 
 	// Second request with same idempotency key (retry)
-	w = th.makeRequest("POST", "/webhook/grafana", body, map[string]string{
+	w = th.makeRequest("POST", "/api/v1/webhooks/grafana", body, map[string]string{
 		"Content-Type":      "application/json",
 		"Authorization":     "Bearer test-token",
 		"X-Idempotency-Key": idempotencyKey,
@@ -250,7 +246,7 @@ func TestGrafanaWebhook_Conflict_SameKeyDifferentPayload(t *testing.T) {
 	body1, _ := json.Marshal(payload1)
 
 	idempotencyKey := "test-conflict-key"
-	w := th.makeRequest("POST", "/webhook/grafana", body1, map[string]string{
+	w := th.makeRequest("POST", "/api/v1/webhooks/grafana", body1, map[string]string{
 		"Content-Type":      "application/json",
 		"Authorization":     "Bearer test-token",
 		"X-Idempotency-Key": idempotencyKey,
@@ -268,7 +264,7 @@ func TestGrafanaWebhook_Conflict_SameKeyDifferentPayload(t *testing.T) {
 	}
 	body2, _ := json.Marshal(payload2)
 
-	w = th.makeRequest("POST", "/webhook/grafana", body2, map[string]string{
+	w = th.makeRequest("POST", "/api/v1/webhooks/grafana", body2, map[string]string{
 		"Content-Type":      "application/json",
 		"Authorization":     "Bearer test-token",
 		"X-Idempotency-Key": idempotencyKey,
@@ -292,7 +288,7 @@ func TestGrafanaWebhook_MissingTimestamp(t *testing.T) {
 	}
 	body, _ := json.Marshal(payload)
 
-	w := th.makeRequest("POST", "/webhook/grafana", body, map[string]string{
+	w := th.makeRequest("POST", "/api/v1/webhooks/grafana", body, map[string]string{
 		"Content-Type":  "application/json",
 		"Authorization": "Bearer test-token",
 	})
@@ -311,7 +307,7 @@ func TestGrafanaWebhook_MissingService(t *testing.T) {
 	}
 	body, _ := json.Marshal(payload)
 
-	w := th.makeRequest("POST", "/webhook/grafana", body, map[string]string{
+	w := th.makeRequest("POST", "/api/v1/webhooks/grafana", body, map[string]string{
 		"Content-Type":  "application/json",
 		"Authorization": "Bearer test-token",
 	})
@@ -325,7 +321,7 @@ func TestGrafanaWebhook_InvalidJSON(t *testing.T) {
 
 	body := []byte(`{invalid json`)
 
-	w := th.makeRequest("POST", "/webhook/grafana", body, map[string]string{
+	w := th.makeRequest("POST", "/api/v1/webhooks/grafana", body, map[string]string{
 		"Content-Type":  "application/json",
 		"Authorization": "Bearer test-token",
 	})
@@ -345,7 +341,7 @@ func TestGrafanaWebhook_TrailingData(t *testing.T) {
 	body, _ := json.Marshal(payload)
 	body = append(body, []byte(` "extra"`)...) // trailing data
 
-	w := th.makeRequest("POST", "/webhook/grafana", body, map[string]string{
+	w := th.makeRequest("POST", "/api/v1/webhooks/grafana", body, map[string]string{
 		"Content-Type":  "application/json",
 		"Authorization": "Bearer test-token",
 	})
@@ -366,7 +362,7 @@ func TestGrafanaWebhook_OversizedBody(t *testing.T) {
 	}
 	body, _ := json.Marshal(payload)
 
-	w := th.makeRequest("POST", "/webhook/grafana", body, map[string]string{
+	w := th.makeRequest("POST", "/api/v1/webhooks/grafana", body, map[string]string{
 		"Content-Type":  "application/json",
 		"Authorization": "Bearer test-token",
 	})
@@ -398,13 +394,9 @@ func TestGrafanaWebhook_Unauthorized(t *testing.T) {
 	r.Use(middleware.BodyLimitMiddleware(cfg.MaxBodyBytes))
 
 	// V1 API endpoints
-	v1 := r.PathPrefix("/v1").Subrouter()
+	v1 := r.PathPrefix("/api/v1").Subrouter()
 	v1.HandleFunc("/webhooks/grafana", h.GrafanaWebhook).Methods("POST")
 	v1.HandleFunc("/webhooks/generic", h.GenericWebhook).Methods("POST")
-
-	// Legacy endpoints (transitional, to be removed after migration)
-	r.HandleFunc("/webhook/grafana", h.GrafanaWebhook).Methods("POST")
-	r.HandleFunc("/webhook/generic", h.GenericWebhook).Methods("POST")
 
 	// Health and metrics
 	r.HandleFunc("/healthz", h.HealthHandler).Methods("GET")
@@ -421,7 +413,7 @@ func TestGrafanaWebhook_Unauthorized(t *testing.T) {
 	body, _ := json.Marshal(payload)
 
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest("POST", "/webhook/grafana", bytes.NewReader(body))
+	req := httptest.NewRequest("POST", "/api/v1/webhooks/grafana", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer wrong-token")
 	th.router.ServeHTTP(w, req)
@@ -452,7 +444,7 @@ func TestGrafanaWebhook_FingerprintDeduplication(t *testing.T) {
 	body, _ := json.Marshal(payload)
 
 	// First request - no idempotency key, should use fingerprint
-	w := th.makeRequest("POST", "/webhook/grafana", body, map[string]string{
+	w := th.makeRequest("POST", "/api/v1/webhooks/grafana", body, map[string]string{
 		"Content-Type":  "application/json",
 		"Authorization": "Bearer test-token",
 	})
@@ -463,7 +455,7 @@ func TestGrafanaWebhook_FingerprintDeduplication(t *testing.T) {
 	eventID1 := resp1.Data.EventID
 
 	// Second request - identical payload, should deduplicate via fingerprint
-	w = th.makeRequest("POST", "/webhook/grafana", body, map[string]string{
+	w = th.makeRequest("POST", "/api/v1/webhooks/grafana", body, map[string]string{
 		"Content-Type":  "application/json",
 		"Authorization": "Bearer test-token",
 	})
@@ -502,7 +494,7 @@ func TestGenericWebhook_Success(t *testing.T) {
 	}
 	body, _ := json.Marshal(req)
 
-	w := th.makeRequest("POST", "/webhook/generic", body, map[string]string{
+	w := th.makeRequest("POST", "/api/v1/webhooks/generic", body, map[string]string{
 		"Content-Type":  "application/json",
 		"Authorization": "Bearer test-token",
 	})
@@ -539,7 +531,7 @@ func TestGenericWebhook_SourceEventIDDeduplication(t *testing.T) {
 	body, _ := json.Marshal(req)
 
 	// First request
-	w := th.makeRequest("POST", "/webhook/generic", body, map[string]string{
+	w := th.makeRequest("POST", "/api/v1/webhooks/generic", body, map[string]string{
 		"Content-Type":  "application/json",
 		"Authorization": "Bearer test-token",
 	})
@@ -550,7 +542,7 @@ func TestGenericWebhook_SourceEventIDDeduplication(t *testing.T) {
 	eventID1 := resp1.Data.EventID
 
 	// Second request with same source_event_id
-	w = th.makeRequest("POST", "/webhook/generic", body, map[string]string{
+	w = th.makeRequest("POST", "/api/v1/webhooks/generic", body, map[string]string{
 		"Content-Type":  "application/json",
 		"Authorization": "Bearer test-token",
 	})
@@ -840,7 +832,7 @@ func TestDBRollback(t *testing.T) {
 		"status": "firing"
 	}`
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/webhooks/generic", strings.NewReader(validBody))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/webhooks/generic", strings.NewReader(validBody))
 	req.Header.Set("Content-Type", "application/json")
 	req = req.WithContext(ctx)
 	w := httptest.NewRecorder()
