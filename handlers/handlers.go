@@ -378,7 +378,7 @@ func (h *Handler) processEvent(ctx context.Context, requestID, source string, re
 	}
 
 	// Circuit breaker: reject if the database dependency is open
-	if !h.circuitBreakerFor("database").Allow() {
+	if !h.circuitBreakerFor().Allow() {
 		h.metrics.WebhookRequestsTotal.WithLabelValues(endpoint, "503").Inc()
 		h.metrics.CircuitBreakerState.WithLabelValues("database").Set(1)
 		return "", false, &models.ValidationError{Details: []models.ErrorDetail{{Field: "database", Reason: "circuit breaker open"}}}
@@ -398,7 +398,7 @@ func (h *Handler) processEvent(ctx context.Context, requestID, source string, re
 		return "", false, err
 	}
 	h.metrics.CircuitBreakerState.WithLabelValues("database").Set(0)
-	h.circuitBreakerFor("database").OnSuccess()
+	h.circuitBreakerFor().OnSuccess()
 
 	if duplicate {
 		h.metrics.WebhookRequestsTotal.WithLabelValues(endpoint, "200").Inc()
@@ -449,7 +449,7 @@ func (h *Handler) processEvent(ctx context.Context, requestID, source string, re
 	h.metrics.DBWriteDuration.Observe(time.Since(dbStart).Seconds())
 
 	if err != nil {
-		h.circuitBreakerFor("database").OnFailure()
+		h.circuitBreakerFor().OnFailure()
 		if isUniqueViolation(err) {
 			if existingID, duplicate := h.handleUniqueViolation(ctx, endpoint, source, ikey, event, start); duplicate {
 				return existingID, true, nil
@@ -459,7 +459,7 @@ func (h *Handler) processEvent(ctx context.Context, requestID, source string, re
 		log.Error().Err(err).Str("event_id", eventID).Msg("Error inserting event")
 		return "", false, err
 	}
-	h.circuitBreakerFor("database").OnSuccess()
+	h.circuitBreakerFor().OnSuccess()
 
 	// Mark idempotency as completed
 	if err := utils.CompleteIdempotency(ctx, h.db, "ingest", source, ikey, eventID); err != nil {
@@ -629,15 +629,15 @@ func (h *Handler) handleUniqueViolation(ctx context.Context, endpoint, source, i
 	return existingID, true
 }
 
-// circuitBreakerFor returns the circuit breaker for the given dependency,
+// circuitBreakerFor returns the circuit breaker for the database dependency,
 // creating it lazily if it does not exist.
-func (h *Handler) circuitBreakerFor(dependency string) *service.CircuitBreaker {
+func (h *Handler) circuitBreakerFor() *service.CircuitBreaker {
 	h.cbMu.Lock()
 	defer h.cbMu.Unlock()
-	cb, ok := h.circuitBreakers[dependency]
+	cb, ok := h.circuitBreakers["database"]
 	if !ok {
 		cb = service.NewCircuitBreaker(3, 30*time.Second)
-		h.circuitBreakers[dependency] = cb
+		h.circuitBreakers["database"] = cb
 	}
 	return cb
 }
