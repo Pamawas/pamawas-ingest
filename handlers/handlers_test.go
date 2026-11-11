@@ -81,6 +81,7 @@ func newTestHandler(t *testing.T, db *sql.DB) *TestHandler {
 	v1 := r.PathPrefix("/api/v1").Subrouter()
 	v1.HandleFunc("/webhooks/grafana", h.GrafanaWebhook).Methods("POST")
 	v1.HandleFunc("/webhooks/generic", h.GenericWebhook).Methods("POST")
+	v1.HandleFunc("/retry-stalled-idempotency", h.RecoverStalledIdempotencyHandler).Methods("POST")
 
 	// Health and metrics
 	r.HandleFunc("/healthz", h.HealthHandler).Methods("GET")
@@ -397,6 +398,7 @@ func TestGrafanaWebhook_Unauthorized(t *testing.T) {
 	v1 := r.PathPrefix("/api/v1").Subrouter()
 	v1.HandleFunc("/webhooks/grafana", h.GrafanaWebhook).Methods("POST")
 	v1.HandleFunc("/webhooks/generic", h.GenericWebhook).Methods("POST")
+	v1.HandleFunc("/retry-stalled-idempotency", h.RecoverStalledIdempotencyHandler).Methods("POST")
 
 	// Health and metrics
 	r.HandleFunc("/healthz", h.HealthHandler).Methods("GET")

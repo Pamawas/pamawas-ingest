@@ -76,14 +76,14 @@ func ComputeRequestHash(req *models.WebhookRequest) (string, error) {
 
 // CheckIdempotency checks if a request is idempotent and returns the result
 // Returns (eventID, duplicate, conflict, error)
-func CheckIdempotency(db *sql.DB, audience, caller, idempotencyKey string, req *models.WebhookRequest) (string, bool, bool, error) {
+func CheckIdempotency(ctx context.Context, db *sql.DB, audience, caller, idempotencyKey string, req *models.WebhookRequest) (string, bool, bool, error) {
 	keyHash := ComputeKeyHash(idempotencyKey)
 	requestHash, err := ComputeRequestHash(req)
 	if err != nil {
 		return "", false, false, err
 	}
 
-	ctx := log.With().Str("audience", audience).Str("caller", caller).Str("key_hash", keyHash[:8]).Logger().WithContext(context.TODO())
+	ctx = log.With().Str("audience", audience).Str("caller", caller).Str("key_hash", keyHash[:8]).Logger().WithContext(ctx)
 
 	// Start a transaction for atomic check-and-insert
 	tx, err := db.BeginTx(ctx, nil)
@@ -150,9 +150,8 @@ func CheckIdempotency(db *sql.DB, audience, caller, idempotencyKey string, req *
 }
 
 // CompleteIdempotency marks an idempotency record as completed with the event ID
-func CompleteIdempotency(db *sql.DB, audience, caller, idempotencyKey, eventID string) error {
+func CompleteIdempotency(ctx context.Context, db *sql.DB, audience, caller, idempotencyKey, eventID string) error {
 	keyHash := ComputeKeyHash(idempotencyKey)
-	ctx := context.TODO()
 
 	_, err := db.ExecContext(ctx, `
 		UPDATE idempotency_records
@@ -160,6 +159,26 @@ func CompleteIdempotency(db *sql.DB, audience, caller, idempotencyKey, eventID s
 		WHERE audience = $3 AND caller = $4 AND key_hash = $5
 	`, IdempotencyStatusCompleted, eventID, audience, caller, keyHash)
 	return err
+}
+
+// RecoverStalledIdempotency reclaims idempotency records stuck in "processing"
+// status whose expires_at is in the past, resetting them to processing with a
+// fresh expiration so the same logical request can be retried. Returns the
+// number of records recovered.
+func RecoverStalledIdempotency(ctx context.Context, db *sql.DB, audience string) (int, error) {
+	result, err := db.ExecContext(ctx, `
+		UPDATE idempotency_records
+		SET status = $1, result_reference = '', created_at = now(), updated_at = now(), expires_at = now() + interval '24 hours'
+		WHERE audience = $1 AND status = $2 AND expires_at < now()
+	`, IdempotencyStatusProcessing, audience, IdempotencyStatusProcessing)
+	if err != nil {
+		return 0, err
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return int(n), nil
 }
 
 // ErrStillProcessing indicates the idempotency record is still being processed

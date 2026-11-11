@@ -79,8 +79,9 @@ func main() {
 
 	// Set connection pool settings
 	db.SetMaxOpenConns(25)
-	db.SetMaxIdleConns(25)
-	db.SetConnMaxLifetime(5 * time.Minute)
+	db.SetMaxIdleConns(5)
+	db.SetConnMaxIdleTime(5 * time.Minute)
+	db.SetConnMaxLifetime(30 * time.Minute)
 
 	log.Info().Msg("Connected to database")
 
@@ -132,6 +133,9 @@ func newRouter(h *handlers.Handler, cfg config.Config) *mux.Router {
 	apiV1 := r.PathPrefix("/api/v1").Subrouter()
 	apiV1.HandleFunc("/webhooks/grafana", h.GrafanaWebhook).Methods("POST")
 	apiV1.HandleFunc("/webhooks/generic", h.GenericWebhook).Methods("POST")
+
+	// Stalled idempotency recovery
+	apiV1.HandleFunc("/retry-stalled-idempotency", h.RecoverStalledIdempotencyHandler).Methods("POST")
 
 	r.HandleFunc("/healthz", h.HealthHandler).Methods("GET")
 	r.HandleFunc("/ready", h.ReadyHandler).Methods("GET")

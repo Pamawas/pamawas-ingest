@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"context"
 	"os"
 	"testing"
 	"time"
@@ -35,26 +36,28 @@ func TestCheckIdempotency(t *testing.T) {
 	caller := "utils-check"
 	key := "test-key-check"
 
+	ctx := context.Background()
+
 	// First call - should create processing record
-	eventID, duplicate, conflict, err := CheckIdempotency(db, "ingest", caller, key, req)
+	eventID, duplicate, conflict, err := CheckIdempotency(ctx, db, "ingest", caller, key, req)
 	require.NoError(t, err)
 	assert.False(t, duplicate)
 	assert.False(t, conflict)
 	assert.Empty(t, eventID)
 
 	// Second call with same key and request - should return ErrStillProcessing
-	eventID, duplicate, conflict, err = CheckIdempotency(db, "ingest", caller, key, req)
+	eventID, duplicate, conflict, err = CheckIdempotency(ctx, db, "ingest", caller, key, req)
 	assert.ErrorIs(t, err, ErrStillProcessing)
 	assert.False(t, duplicate)
 	assert.False(t, conflict)
 	assert.Empty(t, eventID)
 
 	// Complete the idempotency record
-	err = CompleteIdempotency(db, "ingest", caller, key, "evt_123")
+	err = CompleteIdempotency(ctx, db, "ingest", caller, key, "evt_123")
 	require.NoError(t, err)
 
 	// Third call - should return the completed event ID
-	eventID, duplicate, conflict, err = CheckIdempotency(db, "ingest", caller, key, req)
+	eventID, duplicate, conflict, err = CheckIdempotency(ctx, db, "ingest", caller, key, req)
 	require.NoError(t, err)
 	assert.True(t, duplicate)
 	assert.Equal(t, "evt_123", eventID)
@@ -62,7 +65,7 @@ func TestCheckIdempotency(t *testing.T) {
 	// Different request with same key - should conflict
 	req2 := *req
 	req2.Title = "Different"
-	eventID, duplicate, conflict, err = CheckIdempotency(db, "ingest", caller, key, &req2)
+	eventID, duplicate, conflict, err = CheckIdempotency(ctx, db, "ingest", caller, key, &req2)
 	require.NoError(t, err)
 	assert.True(t, conflict)
 }
@@ -90,11 +93,11 @@ func TestCompleteIdempotency(t *testing.T) {
 	key := "test-key-complete"
 
 	// Create processing record
-	_, _, _, err := CheckIdempotency(db, "ingest", caller, key, req)
+	_, _, _, err := CheckIdempotency(context.Background(), db, "ingest", caller, key, req)
 	require.NoError(t, err)
 
 	// Complete it
-	err = CompleteIdempotency(db, "ingest", caller, key, "evt_456")
+	err = CompleteIdempotency(context.Background(), db, "ingest", caller, key, "evt_456")
 	require.NoError(t, err)
 
 	// Verify it's completed
@@ -143,7 +146,7 @@ func TestIdempotencyExpiration(t *testing.T) {
 	require.NoError(t, err)
 
 	// Should allow new request because the existing record is expired
-	eventID, duplicate, conflict, err := CheckIdempotency(db, "ingest", caller, key, req)
+	eventID, duplicate, conflict, err := CheckIdempotency(context.Background(), db, "ingest", caller, key, req)
 	require.NoError(t, err)
 	assert.False(t, duplicate)
 	assert.False(t, conflict)

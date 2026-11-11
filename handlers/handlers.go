@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -17,23 +18,30 @@ import (
 	"github.com/Pamawas/pamawas-ingest/config"
 	"github.com/Pamawas/pamawas-ingest/metrics"
 	"github.com/Pamawas/pamawas-ingest/models"
+	"github.com/Pamawas/pamawas-ingest/service"
 	"github.com/Pamawas/pamawas-ingest/utils"
 )
 
 // Handler holds dependencies for HTTP handlers
 type Handler struct {
-	db      *sql.DB
-	cfg     config.Config
-	metrics *metrics.Metrics
+	db            *sql.DB
+	cfg           config.Config
+	metrics       *metrics.Metrics
+	circuitBreakers map[string]*service.CircuitBreaker
+	cbMu          sync.Mutex
 }
 
 // NewHandler creates a new handler with dependencies
 func NewHandler(db *sql.DB, cfg config.Config, m *metrics.Metrics) *Handler {
-	return &Handler{
-		db:      db,
-		cfg:     cfg,
-		metrics: m,
+	h := &Handler{
+		db:            db,
+		cfg:           cfg,
+		metrics:       m,
+		circuitBreakers: make(map[string]*service.CircuitBreaker),
 	}
+	// Circuit breakers for downstream dependencies (database).
+	h.circuitBreakers["database"] = service.NewCircuitBreaker(3, 30*time.Second)
+	return h
 }
 
 // writeErrorResponse writes a standardized error response
@@ -336,6 +344,14 @@ func (h *Handler) processEvent(ctx context.Context, requestID, source string, re
 	endpoint := source
 	start := time.Now()
 
+	// Reject events with timestamps in the future (clock skew / malformed input)
+	if req.OccurredAt != "" {
+		if occurredAt, err := time.Parse(time.RFC3339, req.OccurredAt); err == nil && occurredAt.After(time.Now().Add(5*time.Minute)) {
+			h.metrics.WebhookRequestsTotal.WithLabelValues(endpoint, "422").Inc()
+			return "", false, &models.ValidationError{Details: []models.ErrorDetail{{Field: "occurred_at", Reason: "must not be in the future"}}}
+		}
+	}
+
 	// Validate request
 	if details := models.ValidateWebhookRequest(req); len(details) > 0 {
 		h.metrics.WebhookRequestsTotal.WithLabelValues(endpoint, "422").Inc()
@@ -361,20 +377,32 @@ func (h *Handler) processEvent(ctx context.Context, requestID, source string, re
 		ikey = utils.GenerateIdempotencyKeyFromFingerprint(source, fingerprint)
 	}
 
+	// Circuit breaker: reject if the database dependency is open
+	if !h.circuitBreakerFor("database").Allow() {
+		h.metrics.WebhookRequestsTotal.WithLabelValues(endpoint, "503").Inc()
+		h.metrics.CircuitBreakerState.WithLabelValues("database").Set(1)
+		return "", false, &models.ValidationError{Details: []models.ErrorDetail{{Field: "database", Reason: "circuit breaker open"}}}
+	}
+
 	// Check idempotency
-	existingEventID, duplicate, conflict, err := utils.CheckIdempotency(h.db, "ingest", source, ikey, req)
+	existingEventID, duplicate, conflict, err := utils.CheckIdempotency(ctx, h.db, "ingest", source, ikey, req)
 	if err != nil {
 		if utils.IsConflict(err) {
 			h.metrics.WebhookRequestsTotal.WithLabelValues(endpoint, "409").Inc()
 			return "", false, err
 		}
+		h.metrics.CircuitBreakerFailures.WithLabelValues("database").Inc()
+		h.metrics.CircuitBreakerState.WithLabelValues("database").Set(1)
 		h.metrics.WebhookRequestsTotal.WithLabelValues(endpoint, "500").Inc()
 		log.Error().Err(err).Str("request_id", requestID).Str("event_id", eventID).Msg("Error checking idempotency")
 		return "", false, err
 	}
+	h.metrics.CircuitBreakerState.WithLabelValues("database").Set(0)
+	h.circuitBreakerFor("database").OnSuccess()
 
 	if duplicate {
 		h.metrics.WebhookRequestsTotal.WithLabelValues(endpoint, "200").Inc()
+		h.metrics.IdempotencyHitTotal.WithLabelValues(endpoint).Inc()
 		h.metrics.EventsProcessedTotal.Inc()
 		h.metrics.WebhookRequestDuration.WithLabelValues(endpoint).Observe(time.Since(start).Seconds())
 		return existingEventID, true, nil
@@ -382,6 +410,7 @@ func (h *Handler) processEvent(ctx context.Context, requestID, source string, re
 
 	if conflict {
 		h.metrics.WebhookRequestsTotal.WithLabelValues(endpoint, "409").Inc()
+		h.metrics.IdempotencyConflictTotal.WithLabelValues(endpoint).Inc()
 		return "", false, utils.ErrStillProcessing // will be converted to 409
 	}
 
@@ -420,6 +449,7 @@ func (h *Handler) processEvent(ctx context.Context, requestID, source string, re
 	h.metrics.DBWriteDuration.Observe(time.Since(dbStart).Seconds())
 
 	if err != nil {
+		h.circuitBreakerFor("database").OnFailure()
 		if isUniqueViolation(err) {
 			if existingID, duplicate := h.handleUniqueViolation(ctx, endpoint, source, ikey, event, start); duplicate {
 				return existingID, true, nil
@@ -429,9 +459,10 @@ func (h *Handler) processEvent(ctx context.Context, requestID, source string, re
 		log.Error().Err(err).Str("event_id", eventID).Msg("Error inserting event")
 		return "", false, err
 	}
+	h.circuitBreakerFor("database").OnSuccess()
 
 	// Mark idempotency as completed
-	if err := utils.CompleteIdempotency(h.db, "ingest", source, ikey, eventID); err != nil {
+	if err := utils.CompleteIdempotency(ctx, h.db, "ingest", source, ikey, eventID); err != nil {
 		log.Error().Err(err).Str("event_id", eventID).Msg("Failed to complete idempotency record")
 		// Non-fatal, event was inserted
 	}
@@ -582,7 +613,7 @@ func (h *Handler) handleUniqueViolation(ctx context.Context, endpoint, source, i
 		return "", false
 	}
 
-	if compErr := utils.CompleteIdempotency(h.db, "ingest", source, ikey, existingID); compErr != nil {
+	if compErr := utils.CompleteIdempotency(ctx, h.db, "ingest", source, ikey, existingID); compErr != nil {
 		log.Warn().Err(compErr).Str("event_id", existingID).Msg("Failed to complete idempotency record for duplicate event")
 	}
 
@@ -596,6 +627,45 @@ func (h *Handler) handleUniqueViolation(ctx context.Context, endpoint, source, i
 		Bool("duplicate", true).
 		Msg("Duplicate event recognized via unique constraint")
 	return existingID, true
+}
+
+// circuitBreakerFor returns the circuit breaker for the given dependency,
+// creating it lazily if it does not exist.
+func (h *Handler) circuitBreakerFor(dependency string) *service.CircuitBreaker {
+	h.cbMu.Lock()
+	defer h.cbMu.Unlock()
+	cb, ok := h.circuitBreakers[dependency]
+	if !ok {
+		cb = service.NewCircuitBreaker(3, 30*time.Second)
+		h.circuitBreakers[dependency] = cb
+	}
+	return cb
+}
+
+// RecoverStalledIdempotencyHandler reclaims idempotency records stuck in
+// "processing" status whose expiration has passed, allowing those logical
+// requests to be retried.
+func (h *Handler) RecoverStalledIdempotencyHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	n, err := utils.RecoverStalledIdempotency(ctx, h.db, "ingest")
+	if err != nil {
+		h.metrics.WebhookRequestsTotal.WithLabelValues("retry-stalled-idempotency", "500").Inc()
+		writeErrorResponse(w, "retry-stalled-idempotency", http.StatusInternalServerError, "internal_error", "failed to recover stalled idempotency records", nil)
+		return
+	}
+	h.metrics.StalledIdempotencyTotal.Add(float64(n))
+	h.metrics.WebhookRequestsTotal.WithLabelValues("retry-stalled-idempotency", "200").Inc()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(w).Encode(map[string]interface{}{
+		"recovered": n,
+		"audience":  "ingest",
+	}); err != nil {
+		log.Error().Err(err).Msg("Failed to encode stalled idempotency recovery response")
+	}
 }
 
 func isUniqueViolation(err error) bool {
