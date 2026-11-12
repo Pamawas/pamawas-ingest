@@ -1,6 +1,7 @@
 package handlers_test
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"net/http"
@@ -121,7 +122,7 @@ func TestGrafanaWebhook_ResolvedForwardsToReporter(t *testing.T) {
 	require.NoError(t, err)
 
 	// Forward the resolve notification to the reporter directly (synchronously for the test).
-	th.ForwardResolvedEventToReporter(eventID, &models.WebhookRequest{})
+	th.ForwardResolvedEventToReporter(context.Background(), eventID, &models.WebhookRequest{})
 
 	// Verify the reporter received the resolve-notification POST.
 	select {

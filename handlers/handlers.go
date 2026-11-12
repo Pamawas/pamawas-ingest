@@ -525,7 +525,7 @@ func (h *Handler) GrafanaWebhook(w http.ResponseWriter, r *http.Request) {
 	// then the cross-service notification is dispatched fire-and-forget so a
 	// slow or unreachable reporter cannot stall the webhook response.
 	if !duplicate && webhookReq.Status == "resolved" && h.resolveNotifier != nil {
-		go h.ForwardResolvedEventToReporter(eventID, webhookReq)
+		h.ForwardResolvedEventToReporter(context.Background(), eventID, webhookReq)
 	}
 
 	writeSuccessResponse(w, requestID, eventID, duplicate)
@@ -663,8 +663,7 @@ func (h *Handler) circuitBreakerFor() *service.CircuitBreaker {
 // the reporter. It is called fire-and-forget from GrafanaWebhook so a slow or
 // unreachable reporter cannot stall the webhook response. The event row is
 // already committed before this runs. Exported for testing.
-func (h *Handler) ForwardResolvedEventToReporter(eventID string, webhookReq *models.WebhookRequest) {
-	ctx := context.Background()
+func (h *Handler) ForwardResolvedEventToReporter(ctx context.Context, eventID string, webhookReq *models.WebhookRequest) {
 	var incidentID string
 	err := h.db.QueryRowContext(ctx, `SELECT incident_id FROM incident_events WHERE event_id = $1 LIMIT 1`, eventID).Scan(&incidentID)
 	if err != nil {
@@ -681,10 +680,7 @@ func (h *Handler) ForwardResolvedEventToReporter(eventID string, webhookReq *mod
 		payload.RequestID = eventID
 	}
 
-	if _, err := h.resolveNotifier.SendResolveNotification(ctx, payload); err != nil {
-		log.Error().Err(err).Str("event_id", eventID).Str("incident_id", incidentID).Msg("Failed to send resolve notification to reporter")
-		return
-	}
+	h.resolveNotifier.SendResolveNotificationAsync(payload)
 	log.Info().Str("event_id", eventID).Str("incident_id", incidentID).Msg("Resolve notification forwarded to reporter")
 }
 
