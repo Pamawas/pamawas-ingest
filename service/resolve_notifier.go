@@ -13,11 +13,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// ResolveNotifier sends resolved-incident notifications to the reporter's
-// /api/v1/resolve-notification endpoint. Fire-and-forget: the ingest handler
-// has already committed the event row before invoking this, so a slow or
-// unreachable reporter cannot stall the webhook response. Panics are
-// recovered; in-flight sends are drained by Close (caller cancels ctx first).
+// ResolveNotifier sends resolved-incident notifications to the reporter's /api/v1/resolve-notification endpoint.
 type ResolveNotifier struct {
 	httpClient *http.Client
 	baseURL    string
@@ -25,10 +21,7 @@ type ResolveNotifier struct {
 	ctx        context.Context
 }
 
-// NewResolveNotifier creates a ResolveNotifier that POSTs to
-// baseURL + /api/v1/resolve-notification. The provided context is used for
-// in-flight async sends; the caller cancels it when shutting down so
-// in-flight requests abort promptly.
+// NewResolveNotifier creates a ResolveNotifier posting to baseURL + /api/v1/resolve-notification.
 func NewResolveNotifier(baseURL string, timeout time.Duration, ctx context.Context) *ResolveNotifier {
 	baseURL = strings.TrimRight(baseURL, "/")
 	return &ResolveNotifier{

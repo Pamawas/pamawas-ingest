@@ -40,10 +40,8 @@ func NewHandler(db *sql.DB, cfg config.Config, m *metrics.Metrics) *Handler {
 		metrics:         m,
 		circuitBreakers: make(map[string]*service.CircuitBreaker),
 	}
-	// Circuit breakers for downstream dependencies (database).
 	h.circuitBreakers["database"] = service.NewCircuitBreaker(3, 30*time.Second)
 
-	// Resolve notifier for forwarding resolved Grafana events to the reporter.
 	if cfg.ReporterURL != "" {
 		h.resolveNotifier = service.NewResolveNotifier(cfg.ReporterURL, 10*time.Second, context.Background())
 	}
@@ -350,7 +348,7 @@ func (h *Handler) processEvent(ctx context.Context, requestID, source string, re
 	endpoint := source
 	start := time.Now()
 
-	// Reject events with timestamps in the future (clock skew / malformed input)
+	// Reject events with timestamps in the future (clock skew)
 	if req.OccurredAt != "" {
 		if occurredAt, err := time.Parse(time.RFC3339, req.OccurredAt); err == nil && occurredAt.After(time.Now().Add(5*time.Minute)) {
 			h.metrics.WebhookRequestsTotal.WithLabelValues(endpoint, "422").Inc()
@@ -358,22 +356,18 @@ func (h *Handler) processEvent(ctx context.Context, requestID, source string, re
 		}
 	}
 
-	// Validate request
 	if details := models.ValidateWebhookRequest(req); len(details) > 0 {
 		h.metrics.WebhookRequestsTotal.WithLabelValues(endpoint, "422").Inc()
 		return "", false, &models.ValidationError{Details: details}
 	}
 
-	// Generate event ID
 	eventID := uuid.NewString()
 
-	// Generate fingerprint if no source_event_id
 	fingerprint := ""
 	if req.SourceEventID == "" {
 		fingerprint = utils.GenerateFingerprint(req)
 	}
 
-	// Determine idempotency key
 	var ikey string
 	if idempotencyKey != "" {
 		ikey = idempotencyKey
@@ -667,14 +661,16 @@ var resolveNotificationBackoff = 10 * time.Second
 // event (via incident_events) and forwards a resolve-notification request to
 // the reporter. Called fire-and-forget from GrafanaWebhook so a slow or
 // unreachable reporter cannot stall the webhook response. The event row is
-// already committed before this runs.
-//
-// The incident_events link is created asynchronously by the correlator on its
-// periodic tick, so it may not exist yet when the webhook is processed. The
-// lookup is retried with a short backoff to cover that race; if the link is
-// still absent after the retries, the event is skipped (it is an orphaned
-// resolved event with no incident to notify about). Exported for testing.
+// already committed before this runs. Runs in a background goroutine; Exported for testing.
 func (h *Handler) ForwardResolvedEventToReporter(ctx context.Context, eventID string, webhookReq *models.WebhookRequest) {
+	go h.tryResolveNotification(eventID, webhookReq)
+}
+
+// tryResolveNotification retries the incident_events lookup and sends the
+// notification when the link is found. Runs in a background goroutine.
+func (h *Handler) tryResolveNotification(eventID string, webhookReq *models.WebhookRequest) {
+	ctx := context.Background()
+
 	var incidentID string
 	err := h.db.QueryRowContext(ctx, `SELECT incident_id FROM incident_events WHERE event_id = $1 LIMIT 1`, eventID).Scan(&incidentID)
 	if err == nil {
