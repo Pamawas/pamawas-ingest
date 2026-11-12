@@ -12,6 +12,7 @@ import (
 	"github.com/Pamawas/pamawas-ingest/handlers"
 	"github.com/Pamawas/pamawas-ingest/metrics"
 	"github.com/Pamawas/pamawas-ingest/middleware"
+	"github.com/Pamawas/pamawas-ingest/models"
 	"github.com/gorilla/mux"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
@@ -76,7 +77,7 @@ func TestGrafanaWebhook_ResolvedForwardsToReporter(t *testing.T) {
 
 	th := newTestHandlerWithResolver(t, db, reporter.URL)
 
-	// Insert an incident linked to the event via incident_events.
+	// Insert an incident (will be linked to the event via incident_events after it's created).
 	_, err := db.ExecContext(t.Context(), `INSERT INTO incidents (id, title, status, started_at, last_event_at, resolved_at, severity, environment, affected_services, correlation_policy, correlation_version) VALUES ($1,'High CPU','resolved',$2,$3,$4,'critical','production','{}','policy',1)`, "inc_resolved_1", time.Now().Add(-time.Hour), time.Now(), time.Now())
 	require.NoError(t, err)
 
@@ -100,11 +101,27 @@ func TestGrafanaWebhook_ResolvedForwardsToReporter(t *testing.T) {
 	})
 	assert.Equal(t, http.StatusAccepted, w.Code)
 
-	// Verify event was inserted.
+	// Verify event was inserted and capture its ID.
+	var resp struct {
+		Data struct {
+			EventID string `json:"event_id"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.NotEmpty(t, resp.Data.EventID)
+	eventID := resp.Data.EventID
+
 	var count int
 	err = db.QueryRow("SELECT COUNT(*) FROM events WHERE source = 'grafana'").Scan(&count)
 	require.NoError(t, err)
 	assert.Equal(t, 1, count)
+
+	// Link the event to the incident via incident_events (as the correlator would).
+	_, err = db.ExecContext(t.Context(), `INSERT INTO incident_events (incident_id, event_id, correlation_reason) VALUES ($1, $2, 'resolution_of_open_incident')`, "inc_resolved_1", eventID)
+	require.NoError(t, err)
+
+	// Forward the resolve notification to the reporter directly (synchronously for the test).
+	th.ForwardResolvedEventToReporter(eventID, &models.WebhookRequest{})
 
 	// Verify the reporter received the resolve-notification POST.
 	select {

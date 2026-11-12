@@ -24,20 +24,20 @@ import (
 
 // Handler holds dependencies for HTTP handlers
 type Handler struct {
-	db            *sql.DB
-	cfg           config.Config
-	metrics       *metrics.Metrics
+	db              *sql.DB
+	cfg             config.Config
+	metrics         *metrics.Metrics
 	resolveNotifier *service.ResolveNotifier
 	circuitBreakers map[string]*service.CircuitBreaker
-	cbMu          sync.Mutex
+	cbMu            sync.Mutex
 }
 
 // NewHandler creates a new handler with dependencies
 func NewHandler(db *sql.DB, cfg config.Config, m *metrics.Metrics) *Handler {
 	h := &Handler{
-		db:            db,
-		cfg:           cfg,
-		metrics:       m,
+		db:              db,
+		cfg:             cfg,
+		metrics:         m,
 		circuitBreakers: make(map[string]*service.CircuitBreaker),
 	}
 	// Circuit breakers for downstream dependencies (database).
@@ -525,7 +525,7 @@ func (h *Handler) GrafanaWebhook(w http.ResponseWriter, r *http.Request) {
 	// then the cross-service notification is dispatched fire-and-forget so a
 	// slow or unreachable reporter cannot stall the webhook response.
 	if !duplicate && webhookReq.Status == "resolved" && h.resolveNotifier != nil {
-		go h.forwardResolvedEventToReporter(eventID, webhookReq)
+		go h.ForwardResolvedEventToReporter(eventID, webhookReq)
 	}
 
 	writeSuccessResponse(w, requestID, eventID, duplicate)
@@ -658,12 +658,12 @@ func (h *Handler) circuitBreakerFor() *service.CircuitBreaker {
 	return cb
 }
 
-// forwardResolvedEventToReporter looks up the incident linked to the resolved
+// ForwardResolvedEventToReporter looks up the incident linked to the resolved
 // event (via incident_events) and forwards a resolve-notification request to
 // the reporter. It is called fire-and-forget from GrafanaWebhook so a slow or
 // unreachable reporter cannot stall the webhook response. The event row is
-// already committed before this runs.
-func (h *Handler) forwardResolvedEventToReporter(eventID string, webhookReq *models.WebhookRequest) {
+// already committed before this runs. Exported for testing.
+func (h *Handler) ForwardResolvedEventToReporter(eventID string, webhookReq *models.WebhookRequest) {
 	ctx := context.Background()
 	var incidentID string
 	err := h.db.QueryRowContext(ctx, `SELECT incident_id FROM incident_events WHERE event_id = $1 LIMIT 1`, eventID).Scan(&incidentID)
