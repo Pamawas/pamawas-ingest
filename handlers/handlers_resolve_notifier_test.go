@@ -24,7 +24,7 @@ import (
 
 // newTestHandlerWithResolver builds a test handler wired with a ResolveNotifier
 // that posts to the given reporter test server, using the same router as main.go.
-func newTestHandlerWithResolver(t *testing.T, db *sql.DB, reporterURL string) *TestHandler {
+func newTestHandlerWithResolver(t *testing.T, db *sql.DB, reporterURL string) *TestHandler { //nolint:unused
 	cfg := config.Config{
 		DatabaseURL:  "",
 		Port:         "8080",

@@ -659,24 +659,21 @@ func (h *Handler) circuitBreakerFor() *service.CircuitBreaker {
 }
 
 // resolveNotificationBackoff is the delay between retries when the
-// incident_events link for a resolved event is not yet present. The
-// correlator creates the link on its periodic tick (CORRELATION_INTERVAL,
-// 1m by default), so a few short retries cover the race without stalling the
-// webhook handler (this runs fire-and-forget). Overridable in tests.
+// incident_events link for a resolved event is not yet present (the correlator
+// creates it on its periodic tick). Overridable in tests.
 var resolveNotificationBackoff = 10 * time.Second
 
 // ForwardResolvedEventToReporter looks up the incident linked to the resolved
 // event (via incident_events) and forwards a resolve-notification request to
-// the reporter. It is called fire-and-forget from GrafanaWebhook so a slow or
+// the reporter. Called fire-and-forget from GrafanaWebhook so a slow or
 // unreachable reporter cannot stall the webhook response. The event row is
 // already committed before this runs.
 //
 // The incident_events link is created asynchronously by the correlator on its
-// periodic tick, so it may not exist yet when the webhook is processed. To
-// avoid dropping the notification, the lookup is retried with a short backoff;
-// if the link is still absent after the retries, the event is skipped (it is
-// an orphaned resolved event with no incident to notify about). Exported for
-// testing.
+// periodic tick, so it may not exist yet when the webhook is processed. The
+// lookup is retried with a short backoff to cover that race; if the link is
+// still absent after the retries, the event is skipped (it is an orphaned
+// resolved event with no incident to notify about). Exported for testing.
 func (h *Handler) ForwardResolvedEventToReporter(ctx context.Context, eventID string, webhookReq *models.WebhookRequest) {
 	var incidentID string
 	err := h.db.QueryRowContext(ctx, `SELECT incident_id FROM incident_events WHERE event_id = $1 LIMIT 1`, eventID).Scan(&incidentID)
@@ -689,8 +686,6 @@ func (h *Handler) ForwardResolvedEventToReporter(ctx context.Context, eventID st
 		return
 	}
 
-	// No incident linked yet: the correlator creates the incident_events link
-	// on its periodic tick, so retry with a short backoff before giving up.
 	log.Debug().Str("event_id", eventID).Msg("No incident linked to resolved event yet; retrying")
 	for i := 0; i < 3; i++ {
 		select {
@@ -716,8 +711,8 @@ func (h *Handler) ForwardResolvedEventToReporter(ctx context.Context, eventID st
 }
 
 // sendResolveNotification forwards a resolve-notification request to the
-// reporter for the incident linked to the resolved event. It is fire-and-
-// forget: a slow or unreachable reporter cannot stall the caller.
+// reporter for the incident linked to the resolved event. Fire-and-forget:
+// a slow or unreachable reporter cannot stall the caller.
 func (h *Handler) sendResolveNotification(eventID, incidentID string, webhookReq *models.WebhookRequest) {
 	payload := service.ResolveNotificationPayload{
 		IncidentID:      incidentID,
