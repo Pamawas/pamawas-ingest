@@ -512,10 +512,7 @@ func (h *Handler) GrafanaWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// When a resolved Grafana event is persisted (and not a duplicate), forward
-	// it to the reporter's /api/v1/resolve-notification endpoint so the user
-	// receives an "alert solved" notification. Fire-and-forget: a slow or
-	// unreachable reporter cannot stall the webhook response.
+	// Forward resolved event to reporter's /api/v1/resolve-notification for "alert solved" notifications.
 	if !duplicate && webhookReq.Status == "resolved" && h.resolveNotifier != nil {
 		h.ForwardResolvedEventToReporter(context.Background(), eventID, webhookReq)
 	}
@@ -649,16 +646,15 @@ func (h *Handler) circuitBreakerFor() *service.CircuitBreaker {
 	return cb
 }
 
-// resolveNotificationBackoff is the delay between retries when incident_events link for a resolved event is not yet present (correlator creates it on its tick). Overridable in tests.
+// resolveNotificationBackoff retries incident_events lookup when no incident is linked yet.
 var resolveNotificationBackoff = 10 * time.Second
 
-// ForwardResolvedEventToReporter forwards a resolve notification for the incident linked to the resolved event, called fire-and-forget from GrafanaWebhook.
+// ForwardResolvedEventToReporter forwards a resolve notification for the incident linked to the resolved event (fire-and-forget).
 func (h *Handler) ForwardResolvedEventToReporter(ctx context.Context, eventID string, webhookReq *models.WebhookRequest) {
 	go h.tryResolveNotification(eventID, webhookReq)
 }
 
-// tryResolveNotification retries the incident_events lookup and sends the
-// notification when the link is found. Runs in a background goroutine.
+// tryResolveNotification retries the incident_events lookup and sends the notification when found.
 func (h *Handler) tryResolveNotification(eventID string, webhookReq *models.WebhookRequest) {
 	ctx := context.Background()
 
@@ -697,9 +693,7 @@ func (h *Handler) tryResolveNotification(eventID string, webhookReq *models.Webh
 	log.Warn().Str("event_id", eventID).Msg("No incident linked to resolved event after retries; skipping resolve notification")
 }
 
-// sendResolveNotification forwards a resolve-notification request to the
-// reporter for the incident linked to the resolved event. Fire-and-forget:
-// a slow or unreachable reporter cannot stall the caller.
+// sendResolveNotification forwards a resolve notification for the linked incident; fire-and-forget.
 func (h *Handler) sendResolveNotification(eventID, incidentID string, webhookReq *models.WebhookRequest) {
 	payload := service.ResolveNotificationPayload{
 		IncidentID:      incidentID,
@@ -714,9 +708,7 @@ func (h *Handler) sendResolveNotification(eventID, incidentID string, webhookReq
 	log.Info().Str("event_id", eventID).Str("incident_id", incidentID).Msg("Resolve notification forwarded to reporter")
 }
 
-// RecoverStalledIdempotencyHandler reclaims idempotency records stuck in
-// "processing" status whose expiration has passed, allowing those logical
-// requests to be retried.
+// RecoverStalledIdempotencyHandler reclaims idempotency records stuck in "processing" past expiration.
 func (h *Handler) RecoverStalledIdempotencyHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
