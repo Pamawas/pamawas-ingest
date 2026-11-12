@@ -23,7 +23,6 @@ func GenerateFingerprint(event *models.WebhookRequest) string {
 	parts = append(parts, event.Status)
 	parts = append(parts, event.OccurredAt)
 
-	// Sort labels for deterministic ordering
 	if len(event.Labels) > 0 {
 		keys := make([]string, 0, len(event.Labels))
 		for k := range event.Labels {
@@ -35,7 +34,6 @@ func GenerateFingerprint(event *models.WebhookRequest) string {
 		}
 	}
 
-	// Create SHA256 hash
 	data := strings.Join(parts, "|")
 	hash := sha256.Sum256([]byte(data))
 	return hex.EncodeToString(hash[:])

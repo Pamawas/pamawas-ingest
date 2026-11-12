@@ -12,7 +12,6 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// IdempotencyRecord represents an idempotency record in the database
 type IdempotencyRecord struct {
 	Audience        string
 	Caller          string
@@ -24,14 +23,12 @@ type IdempotencyRecord struct {
 	ExpiresAt       time.Time
 }
 
-// IdempotencyStatus constants
 const (
 	IdempotencyStatusProcessing = "processing"
 	IdempotencyStatusCompleted  = "completed"
 	IdempotencyStatusConflict   = "conflict"
 )
 
-// ComputeKeyHash computes a hash of the idempotency key
 func ComputeKeyHash(key string) string {
 	hash := sha256.Sum256([]byte(key))
 	return hex.EncodeToString(hash[:])
@@ -42,7 +39,6 @@ func ComputeKeyHash(key string) string {
 // (e.g., Grafana alert values) that change on replay but don't constitute
 // a different logical request.
 func ComputeRequestHash(req *models.WebhookRequest) (string, error) {
-	// Create a copy without RawPayload for hashing
 	hashable := struct {
 		SchemaVersion int                    `json:"schema_version"`
 		SourceEventID string                 `json:"source_event_id,omitempty"`
@@ -85,7 +81,6 @@ func CheckIdempotency(ctx context.Context, db *sql.DB, audience, caller, idempot
 
 	ctx = log.With().Str("audience", audience).Str("caller", caller).Str("key_hash", keyHash[:8]).Logger().WithContext(ctx)
 
-	// Start a transaction for atomic check-and-insert
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return "", false, false, err
@@ -96,8 +91,6 @@ func CheckIdempotency(ctx context.Context, db *sql.DB, audience, caller, idempot
 		}
 	}()
 
-	// Insert only when the key is new. Existing records must not be mutated
-	// before their request hash, status, and expiration are classified.
 	var inserted bool
 	err = tx.QueryRowContext(ctx, `
 		INSERT INTO idempotency_records (audience, caller, key_hash, request_hash, status, result_reference, created_at, expires_at)
@@ -149,7 +142,6 @@ func CheckIdempotency(ctx context.Context, db *sql.DB, audience, caller, idempot
 	return "", false, false, nil
 }
 
-// CompleteIdempotency marks an idempotency record as completed with the event ID
 func CompleteIdempotency(ctx context.Context, db *sql.DB, audience, caller, idempotencyKey, eventID string) error {
 	keyHash := ComputeKeyHash(idempotencyKey)
 
@@ -181,10 +173,8 @@ func RecoverStalledIdempotency(ctx context.Context, db *sql.DB, audience string)
 	return int(n), nil
 }
 
-// ErrStillProcessing indicates the idempotency record is still being processed
 var ErrStillProcessing = &IdempotencyError{"still processing"}
 
-// IdempotencyError represents an idempotency-specific error
 type IdempotencyError struct {
 	message string
 }
@@ -193,7 +183,6 @@ func (e *IdempotencyError) Error() string {
 	return e.message
 }
 
-// IsConflict checks if the error is a conflict error
 func IsConflict(err error) bool {
 	if err == nil {
 		return false
@@ -209,7 +198,6 @@ func GenerateIdempotencyKey(source, sourceEventID string) string {
 	if sourceEventID != "" {
 		return "ingest:" + source + ":" + sourceEventID
 	}
-	// For fingerprint-based deduplication, we'll use a different approach
 	return ""
 }
 

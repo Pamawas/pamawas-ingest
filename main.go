@@ -27,7 +27,6 @@ func main() {
 	initLogger(cfg)
 	printStartupBanner(loadVersion(), cfg.Port)
 
-	// Initialize OpenTelemetry tracing
 	otelShutdown, err := otel.InitTracer(otel.Config{
 		ServiceName:  "pamawas-ingest",
 		OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
@@ -50,7 +49,6 @@ func main() {
 		Str("log_level", cfg.LogLevel).
 		Msg("Starting pamawas-ingest")
 
-	// Connect to database with retries
 	db, err := sql.Open("postgres", cfg.DatabaseURL)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Error opening database")
@@ -61,7 +59,6 @@ func main() {
 		}
 	}()
 
-	// Test connection with retries
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -77,7 +74,6 @@ func main() {
 		log.Fatal().Err(err).Msg("Failed to connect to database after retries")
 	}
 
-	// Set connection pool settings
 	db.SetMaxOpenConns(25)
 	db.SetMaxIdleConns(5)
 	db.SetConnMaxIdleTime(5 * time.Minute)
@@ -85,15 +81,10 @@ func main() {
 
 	log.Info().Msg("Connected to database")
 
-	// Initialize metrics
 	m := metrics.NewMetrics()
-
-	// Initialize handlers
 	h := handlers.NewHandler(db, cfg, m)
-
 	r := newRouter(h, cfg)
 
-	// Create server
 	srv := &http.Server{
 		Addr:         ":" + cfg.Port,
 		Handler:      r,
@@ -102,7 +93,6 @@ func main() {
 		IdleTimeout:  60 * time.Second,
 	}
 
-	// Graceful shutdown
 	go func() {
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
@@ -133,8 +123,6 @@ func newRouter(h *handlers.Handler, cfg config.Config) *mux.Router {
 	apiV1 := r.PathPrefix("/api/v1").Subrouter()
 	apiV1.HandleFunc("/webhooks/grafana", h.GrafanaWebhook).Methods("POST")
 	apiV1.HandleFunc("/webhooks/generic", h.GenericWebhook).Methods("POST")
-
-	// Stalled idempotency recovery
 	apiV1.HandleFunc("/retry-stalled-idempotency", h.RecoverStalledIdempotencyHandler).Methods("POST")
 
 	r.HandleFunc("/healthz", h.HealthHandler).Methods("GET")

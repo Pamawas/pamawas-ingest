@@ -63,7 +63,6 @@ func BodyLimitMiddleware(maxBytes int64) func(http.Handler) http.Handler {
 				http.Error(w, "Request body too large", http.StatusRequestEntityTooLarge)
 				return
 			}
-			// Wrap the body reader to enforce limit during read
 			r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
 			next.ServeHTTP(w, r)
 		})

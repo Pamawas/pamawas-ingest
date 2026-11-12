@@ -31,8 +31,7 @@ func NewResolveNotifier(baseURL string, timeout time.Duration, ctx context.Conte
 	}
 }
 
-// ResolveNotificationPayload mirrors the reporter's payload so ingest can
-// construct requests without importing the reporter module.
+// ResolveNotificationPayload mirrors the reporter's payload for ingest.
 type ResolveNotificationPayload struct {
 	IncidentID       string `json:"incident_id"`
 	RequestID        string `json:"request_id"`
@@ -48,8 +47,7 @@ type ResolveNotificationResponse struct {
 	Message    string `json:"message"`
 }
 
-// SendResolveNotification posts a resolve-notification request to the reporter
-// and returns the decoded response.
+// SendResolveNotification posts a resolve-notification request to the reporter and returns the decoded response.
 func (n *ResolveNotifier) SendResolveNotification(ctx context.Context, payload ResolveNotificationPayload) (*ResolveNotificationResponse, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -83,9 +81,7 @@ func (n *ResolveNotifier) SendResolveNotification(ctx context.Context, payload R
 	return &out, nil
 }
 
-// SendResolveNotificationAsync dispatches the resolve notification to the
-// reporter without blocking the caller. Fire-and-forget; a panic in the send is
-// recovered. In-flight sends are drained by Close (caller cancels ctx first).
+// SendResolveNotificationAsync dispatches the notification without blocking.
 func (n *ResolveNotifier) SendResolveNotificationAsync(payload ResolveNotificationPayload) {
 	n.wg.Add(1)
 	go func() {
@@ -101,9 +97,7 @@ func (n *ResolveNotifier) SendResolveNotificationAsync(payload ResolveNotificati
 	}()
 }
 
-// Close waits for any in-flight async resolve-notification sends to complete.
-// The caller should cancel the client context first so that in-flight requests
-// are aborted promptly instead of waiting out the full client timeout.
+// Close waits for in-flight async sends to complete.
 func (n *ResolveNotifier) Close() {
 	n.wg.Wait()
 }
