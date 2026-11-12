@@ -117,7 +117,7 @@ func TestGrafanaWebhook_ResolvedForwardsToReporter(t *testing.T) {
 	assert.Equal(t, 1, count)
 
 	// Link the event to the incident via incident_events (as the correlator would).
-	_, err = db.ExecContext(t.Context(), `INSERT INTO incident_events (incident_id, event_id, correlation_reason) VALUES ($1, $2, 'resolution_of_open_incident')`, "inc_resolved_1", eventID)
+	_, err = db.ExecContext(t.Context(), `INSERT INTO incident_events (incident_id, event_id, correlation_reason, policy_version) VALUES ($1, $2, 'resolution_of_open_incident', 1)`, "inc_resolved_1", eventID)
 	require.NoError(t, err)
 
 	// Forward the resolve notification to the reporter directly (synchronously for the test).
