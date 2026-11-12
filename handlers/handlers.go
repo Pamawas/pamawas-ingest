@@ -27,6 +27,7 @@ type Handler struct {
 	db            *sql.DB
 	cfg           config.Config
 	metrics       *metrics.Metrics
+	resolveNotifier *service.ResolveNotifier
 	circuitBreakers map[string]*service.CircuitBreaker
 	cbMu          sync.Mutex
 }
@@ -41,6 +42,11 @@ func NewHandler(db *sql.DB, cfg config.Config, m *metrics.Metrics) *Handler {
 	}
 	// Circuit breakers for downstream dependencies (database).
 	h.circuitBreakers["database"] = service.NewCircuitBreaker(3, 30*time.Second)
+
+	// Resolve notifier for forwarding resolved Grafana events to the reporter.
+	if cfg.ReporterURL != "" {
+		h.resolveNotifier = service.NewResolveNotifier(cfg.ReporterURL, 10*time.Second, context.Background())
+	}
 	return h
 }
 
@@ -512,6 +518,16 @@ func (h *Handler) GrafanaWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// When a resolved Grafana event is persisted (and not a duplicate), forward
+	// it to the reporter's /api/v1/resolve-notification endpoint so the user
+	// receives an "alert solved" notification. This mirrors the high-severity
+	// flow where the scheduler calls the reporter: the event is committed first,
+	// then the cross-service notification is dispatched fire-and-forget so a
+	// slow or unreachable reporter cannot stall the webhook response.
+	if !duplicate && webhookReq.Status == "resolved" && h.resolveNotifier != nil {
+		go h.forwardResolvedEventToReporter(eventID, webhookReq)
+	}
+
 	writeSuccessResponse(w, requestID, eventID, duplicate)
 }
 
@@ -640,6 +656,36 @@ func (h *Handler) circuitBreakerFor() *service.CircuitBreaker {
 		h.circuitBreakers["database"] = cb
 	}
 	return cb
+}
+
+// forwardResolvedEventToReporter looks up the incident linked to the resolved
+// event (via incident_events) and forwards a resolve-notification request to
+// the reporter. It is called fire-and-forget from GrafanaWebhook so a slow or
+// unreachable reporter cannot stall the webhook response. The event row is
+// already committed before this runs.
+func (h *Handler) forwardResolvedEventToReporter(eventID string, webhookReq *models.WebhookRequest) {
+	ctx := context.Background()
+	var incidentID string
+	err := h.db.QueryRowContext(ctx, `SELECT incident_id FROM incident_events WHERE event_id = $1 LIMIT 1`, eventID).Scan(&incidentID)
+	if err != nil {
+		log.Error().Err(err).Str("event_id", eventID).Msg("No incident linked to resolved event; skipping resolve notification")
+		return
+	}
+
+	payload := service.ResolveNotificationPayload{
+		IncidentID:      incidentID,
+		RequestID:       webhookReq.SourceEventID,
+		ContractVersion: 1,
+	}
+	if payload.RequestID == "" {
+		payload.RequestID = eventID
+	}
+
+	if _, err := h.resolveNotifier.SendResolveNotification(ctx, payload); err != nil {
+		log.Error().Err(err).Str("event_id", eventID).Str("incident_id", incidentID).Msg("Failed to send resolve notification to reporter")
+		return
+	}
+	log.Info().Str("event_id", eventID).Str("incident_id", incidentID).Msg("Resolve notification forwarded to reporter")
 }
 
 // RecoverStalledIdempotencyHandler reclaims idempotency records stuck in

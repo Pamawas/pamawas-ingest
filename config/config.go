@@ -14,6 +14,7 @@ type Config struct {
 	WebhookToken string
 	MaxBodyBytes int64
 	TestMode     bool
+	ReporterURL  string
 }
 
 func Load() Config {
@@ -47,9 +48,13 @@ func Load() Config {
 	if err := v.BindEnv("test_mode", "TEST_MODE", "PAMAWAS_INGEST_TEST_MODE"); err != nil {
 		panic(fmt.Sprintf("failed to bind TEST_MODE env: %v", err))
 	}
+	if err := v.BindEnv("reporter_url", "REPORTER_URL", "PAMAWAS_INGEST_REPORTER_URL"); err != nil {
+		panic(fmt.Sprintf("failed to bind REPORTER_URL env: %v", err))
+	}
 
 	// Defaults
 	v.SetDefault("port", "8080")
+	v.SetDefault("reporter_url", "http://pamawas-reporter:8080")
 	v.SetDefault("log_level", "info")
 	v.SetDefault("environment", "development")
 	v.SetDefault("max_body_bytes", 1048576) // 1 MiB
@@ -70,6 +75,7 @@ func Load() Config {
 		WebhookToken: v.GetString("webhook_token"),
 		MaxBodyBytes: v.GetInt64("max_body_bytes"),
 		TestMode:     v.GetBool("test_mode"),
+		ReporterURL:  v.GetString("reporter_url"),
 	}
 
 	if cfg.DatabaseURL == "" {
