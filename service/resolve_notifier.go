@@ -13,7 +13,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// ResolveNotifier sends resolved-incident notifications to the reporter's /api/v1/resolve-notification endpoint.
+// ResolveNotifier sends resolved-incident notifications to the reporter.
 type ResolveNotifier struct {
 	httpClient *http.Client
 	baseURL    string
@@ -31,7 +31,7 @@ func NewResolveNotifier(baseURL string, timeout time.Duration, ctx context.Conte
 	}
 }
 
-// ResolveNotificationPayload mirrors the reporter's payload for ingest.
+// ResolveNotificationPayload mirrors the reporter's resolve-notification payload.
 type ResolveNotificationPayload struct {
 	IncidentID       string `json:"incident_id"`
 	RequestID        string `json:"request_id"`

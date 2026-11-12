@@ -25,8 +25,7 @@ func Load() Config {
 	v.AddConfigPath("./config")
 	v.AddConfigPath("/etc/pamawas/")
 	v.SetEnvPrefix("PAMAWAS_INGEST")
-	// Don't use AutomaticEnv() - Kubernetes injects PAMAWAS_INGEST_PORT=tcp://IP:PORT
-	// which would override our config. Explicitly bind only what we need.
+	// Avoid AutomaticEnv(): Kubernetes sets PAMAWAS_INGEST_PORT=tcp://IP:PORT, which would override config.
 	if err := v.BindEnv("database_url", "DATABASE_URL", "PAMAWAS_INGEST_DATABASE_URL"); err != nil {
 		panic(fmt.Sprintf("failed to bind DATABASE_URL env: %v", err))
 	}

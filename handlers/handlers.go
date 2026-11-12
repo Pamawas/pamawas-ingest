@@ -155,7 +155,7 @@ func parseGrafanaPayload(payload map[string]interface{}) *models.GrafanaWebhookR
 	return grafanaReq
 }
 
-// extractCustomPayload extracts fields from Grafana 12+ custom payload format
+// extractCustomPayload extracts fields from Grafana 12+ custom payload format.
 func extractCustomPayload(payload map[string]interface{}, req *models.GrafanaWebhookRequest) {
 	if ruleName, ok := payload["ruleName"].(string); ok {
 		req.RuleName = ruleName
@@ -179,7 +179,7 @@ func extractCustomPayload(payload map[string]interface{}, req *models.GrafanaWeb
 	}
 }
 
-// extractFromAlerts extracts missing fields from the alerts array (default payload format)
+// extractFromAlerts extracts missing fields from the alerts array (default payload format).
 func extractFromAlerts(payload map[string]interface{}, req *models.GrafanaWebhookRequest) {
 	if hasCompleteGrafanaFields(req) {
 		return
@@ -514,10 +514,8 @@ func (h *Handler) GrafanaWebhook(w http.ResponseWriter, r *http.Request) {
 
 	// When a resolved Grafana event is persisted (and not a duplicate), forward
 	// it to the reporter's /api/v1/resolve-notification endpoint so the user
-	// receives an "alert solved" notification. This mirrors the high-severity
-	// flow where the scheduler calls the reporter: the event is committed first,
-	// then the cross-service notification is dispatched fire-and-forget so a
-	// slow or unreachable reporter cannot stall the webhook response.
+	// receives an "alert solved" notification. Fire-and-forget: a slow or
+	// unreachable reporter cannot stall the webhook response.
 	if !duplicate && webhookReq.Status == "resolved" && h.resolveNotifier != nil {
 		h.ForwardResolvedEventToReporter(context.Background(), eventID, webhookReq)
 	}
@@ -639,8 +637,7 @@ func (h *Handler) handleUniqueViolation(ctx context.Context, endpoint, source, i
 	return existingID, true
 }
 
-// circuitBreakerFor returns the circuit breaker for the database dependency,
-// creating it lazily if it does not exist.
+// circuitBreakerFor returns the DB circuit breaker, creating it lazily.
 func (h *Handler) circuitBreakerFor() *service.CircuitBreaker {
 	h.cbMu.Lock()
 	defer h.cbMu.Unlock()
@@ -652,16 +649,10 @@ func (h *Handler) circuitBreakerFor() *service.CircuitBreaker {
 	return cb
 }
 
-// resolveNotificationBackoff is the delay between retries when the
-// incident_events link for a resolved event is not yet present (the correlator
-// creates it on its periodic tick). Overridable in tests.
+// resolveNotificationBackoff is the delay between retries when incident_events link for a resolved event is not yet present (correlator creates it on its tick). Overridable in tests.
 var resolveNotificationBackoff = 10 * time.Second
 
-// ForwardResolvedEventToReporter looks up the incident linked to the resolved
-// event (via incident_events) and forwards a resolve-notification request to
-// the reporter. Called fire-and-forget from GrafanaWebhook so a slow or
-// unreachable reporter cannot stall the webhook response. The event row is
-// already committed before this runs. Runs in a background goroutine; Exported for testing.
+// ForwardResolvedEventToReporter forwards a resolve notification for the incident linked to the resolved event, called fire-and-forget from GrafanaWebhook.
 func (h *Handler) ForwardResolvedEventToReporter(ctx context.Context, eventID string, webhookReq *models.WebhookRequest) {
 	go h.tryResolveNotification(eventID, webhookReq)
 }

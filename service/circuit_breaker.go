@@ -14,11 +14,7 @@ const (
 	CircuitStateHalfOpen CircuitState = "half-open"
 )
 
-// CircuitBreaker is a simple failure-threshold circuit breaker.
-// It starts closed (requests allowed). After maxFailures consecutive failures
-// it trips open (requests rejected immediately) for the given timeout, then
-// allows a single trial request (half-open); success closes it again, failure
-// reopens it.
+// CircuitBreaker trips open after maxFailures consecutive failures, stays open for timeout, then allows a single trial call (half-open).
 type CircuitBreaker struct {
 	mu            sync.Mutex
 	state         CircuitState
@@ -29,9 +25,7 @@ type CircuitBreaker struct {
 	halfOpenCalls int // number of calls allowed in half-open state (1)
 }
 
-// NewCircuitBreaker creates a circuit breaker that trips open after
-// maxFailures consecutive failures and stays open for timeout before
-// allowing a single trial call.
+// NewCircuitBreaker trips open after maxFailures consecutive failures, stays open for timeout, then allows a single trial call.
 func NewCircuitBreaker(maxFailures int, timeout time.Duration) *CircuitBreaker {
 	return &CircuitBreaker{
 		state:      CircuitStateClosed,

@@ -142,9 +142,7 @@ func (mr *MigrationRunner) Run(ctx context.Context) error {
 	return nil
 }
 
-// FindMigrationsDir locates the migrations directory by checking standard locations:
-// 1. Local relative paths (e.g. "../migrations", "./migrations") used in CI and standalone setups.
-// 2. Sibling pamawas-schema repository (e.g. "../../pamawas-schema/migrations", "../pamawas-schema/migrations") used in local development.
+// FindMigrationsDir locates the migrations directory by checking standard locations; falls back to "../migrations".
 func FindMigrationsDir() string {
 	candidates := []string{
 		"../migrations",
