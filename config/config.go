@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/spf13/viper"
 )
@@ -23,6 +24,11 @@ type Config struct {
 	RateLimitBurst        int
 	WebhookRateLimitRPS   float64
 	WebhookRateLimitBurst int
+
+	// Circuit breaker for the database dependency (design review P2:
+	// centralized; was hard-coded 3 / 30s in handlers).
+	CircuitBreakerFailureThreshold int
+	CircuitBreakerResetTimeout     time.Duration
 }
 
 func Load() Config {
@@ -70,6 +76,12 @@ func Load() Config {
 	if err := v.BindEnv("webhook_rate_limit_burst", "WEBHOOK_RATE_LIMIT_BURST"); err != nil {
 		panic(fmt.Sprintf("failed to bind WEBHOOK_RATE_LIMIT_BURST env: %v", err))
 	}
+	if err := v.BindEnv("circuit_breaker_failure_threshold", "CIRCUIT_BREAKER_FAILURE_THRESHOLD"); err != nil {
+		panic(fmt.Sprintf("failed to bind CIRCUIT_BREAKER_FAILURE_THRESHOLD env: %v", err))
+	}
+	if err := v.BindEnv("circuit_breaker_reset_timeout", "CIRCUIT_BREAKER_RESET_TIMEOUT"); err != nil {
+		panic(fmt.Sprintf("failed to bind CIRCUIT_BREAKER_RESET_TIMEOUT env: %v", err))
+	}
 
 	// Defaults
 	v.SetDefault("port", "8080")
@@ -82,6 +94,8 @@ func Load() Config {
 	v.SetDefault("rate_limit_burst", 20)
 	v.SetDefault("webhook_rate_limit_rps", 50)
 	v.SetDefault("webhook_rate_limit_burst", 100)
+	v.SetDefault("circuit_breaker_failure_threshold", 3)
+	v.SetDefault("circuit_breaker_reset_timeout", "30s")
 
 	if err := v.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
@@ -91,18 +105,20 @@ func Load() Config {
 	}
 
 	cfg := Config{
-		DatabaseURL:           v.GetString("database_url"),
-		Port:                  v.GetString("port"),
-		LogLevel:              v.GetString("log_level"),
-		Environment:           v.GetString("environment"),
-		WebhookToken:          v.GetString("webhook_token"),
-		MaxBodyBytes:          v.GetInt64("max_body_bytes"),
-		TestMode:              v.GetBool("test_mode"),
-		ReporterURL:           v.GetString("reporter_url"),
-		RateLimitRPS:          v.GetFloat64("rate_limit_rps"),
-		RateLimitBurst:        v.GetInt("rate_limit_burst"),
-		WebhookRateLimitRPS:   v.GetFloat64("webhook_rate_limit_rps"),
-		WebhookRateLimitBurst: v.GetInt("webhook_rate_limit_burst"),
+		DatabaseURL:                    v.GetString("database_url"),
+		Port:                           v.GetString("port"),
+		LogLevel:                       v.GetString("log_level"),
+		Environment:                    v.GetString("environment"),
+		WebhookToken:                   v.GetString("webhook_token"),
+		MaxBodyBytes:                   v.GetInt64("max_body_bytes"),
+		TestMode:                       v.GetBool("test_mode"),
+		ReporterURL:                    v.GetString("reporter_url"),
+		RateLimitRPS:                   v.GetFloat64("rate_limit_rps"),
+		RateLimitBurst:                 v.GetInt("rate_limit_burst"),
+		WebhookRateLimitRPS:            v.GetFloat64("webhook_rate_limit_rps"),
+		WebhookRateLimitBurst:          v.GetInt("webhook_rate_limit_burst"),
+		CircuitBreakerFailureThreshold: v.GetInt("circuit_breaker_failure_threshold"),
+		CircuitBreakerResetTimeout:     v.GetDuration("circuit_breaker_reset_timeout"),
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -135,6 +151,12 @@ func (c Config) Validate() error {
 	}
 	if !c.TestMode && c.WebhookToken == "" {
 		return fmt.Errorf("webhook_token is required outside test mode (set PAMAWAS_WEBHOOK_TOKEN or enable TEST_MODE)")
+	}
+	if c.CircuitBreakerFailureThreshold < 1 {
+		return fmt.Errorf("circuit_breaker_failure_threshold must be >= 1, got %d", c.CircuitBreakerFailureThreshold)
+	}
+	if c.CircuitBreakerResetTimeout <= 0 {
+		return fmt.Errorf("circuit_breaker_reset_timeout must be > 0, got %s", c.CircuitBreakerResetTimeout)
 	}
 	return nil
 }

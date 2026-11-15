@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	_ "github.com/lib/pq"
 
@@ -57,13 +58,15 @@ func getenv(key, fallback string) string {
 // newTestHandler creates a test handler with test config
 func newTestHandler(t *testing.T, db *sql.DB) *TestHandler {
 	cfg := config.Config{
-		DatabaseURL:  "",
-		Port:         "8080",
-		LogLevel:     "debug",
-		Environment:  "test",
-		WebhookToken: "test-token",
-		MaxBodyBytes: 1048576,
-		TestMode:     true,
+		DatabaseURL:                    "",
+		Port:                           "8080",
+		LogLevel:                       "debug",
+		Environment:                    "test",
+		WebhookToken:                   "test-token",
+		MaxBodyBytes:                   1048576,
+		TestMode:                       true,
+		CircuitBreakerFailureThreshold: 3,
+		CircuitBreakerResetTimeout:     30 * time.Second,
 	}
 
 	// Use a custom registry for tests to avoid duplicate metrics registration
@@ -375,13 +378,15 @@ func TestGrafanaWebhook_Unauthorized(t *testing.T) {
 	defer db.Close()
 	// Disable test mode to test auth
 	cfg := config.Config{
-		DatabaseURL:  "",
-		Port:         "8080",
-		LogLevel:     "debug",
-		Environment:  "test",
-		WebhookToken: "test-token",
-		MaxBodyBytes: 1048576,
-		TestMode:     false,
+		DatabaseURL:                    "",
+		Port:                           "8080",
+		LogLevel:                       "debug",
+		Environment:                    "test",
+		WebhookToken:                   "test-token",
+		MaxBodyBytes:                   1048576,
+		TestMode:                       false,
+		CircuitBreakerFailureThreshold: 3,
+		CircuitBreakerResetTimeout:     30 * time.Second,
 	}
 	// Use a custom registry for tests to avoid duplicate metrics registration
 	reg := prometheus.NewRegistry()

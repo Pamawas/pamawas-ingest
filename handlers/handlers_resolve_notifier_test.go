@@ -26,14 +26,16 @@ import (
 // that posts to the given reporter test server, using the same router as main.go.
 func newTestHandlerWithResolver(t *testing.T, db *sql.DB, reporterURL string) *TestHandler { //nolint:unused
 	cfg := config.Config{
-		DatabaseURL:  "",
-		Port:         "8080",
-		LogLevel:     "debug",
-		Environment:  "test",
-		WebhookToken: "test-token",
-		MaxBodyBytes: 1048576,
-		TestMode:     true,
-		ReporterURL:  reporterURL,
+		DatabaseURL:                    "",
+		Port:                           "8080",
+		LogLevel:                       "debug",
+		Environment:                    "test",
+		WebhookToken:                   "test-token",
+		MaxBodyBytes:                   1048576,
+		TestMode:                       true,
+		ReporterURL:                    reporterURL,
+		CircuitBreakerFailureThreshold: 3,
+		CircuitBreakerResetTimeout:     30 * time.Second,
 	}
 
 	reg := prometheus.NewRegistry()

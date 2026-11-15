@@ -40,7 +40,7 @@ func NewHandler(db *sql.DB, cfg config.Config, m *metrics.Metrics) *Handler {
 		metrics:         m,
 		circuitBreakers: make(map[string]*service.CircuitBreaker),
 	}
-	h.circuitBreakers["database"] = service.NewCircuitBreaker(3, 30*time.Second)
+	h.circuitBreakers["database"] = service.NewCircuitBreaker(cfg.CircuitBreakerFailureThreshold, cfg.CircuitBreakerResetTimeout)
 
 	if cfg.ReporterURL != "" {
 		h.resolveNotifier = service.NewResolveNotifier(cfg.ReporterURL, 10*time.Second, context.Background())
@@ -634,16 +634,11 @@ func (h *Handler) handleUniqueViolation(ctx context.Context, endpoint, source, i
 	return existingID, true
 }
 
-// circuitBreakerFor returns the DB circuit breaker, creating it lazily.
+// circuitBreakerFor returns the DB circuit breaker seeded at construction.
 func (h *Handler) circuitBreakerFor() *service.CircuitBreaker {
 	h.cbMu.Lock()
 	defer h.cbMu.Unlock()
-	cb, ok := h.circuitBreakers["database"]
-	if !ok {
-		cb = service.NewCircuitBreaker(3, 30*time.Second)
-		h.circuitBreakers["database"] = cb
-	}
-	return cb
+	return h.circuitBreakers["database"]
 }
 
 // resolveNotificationBackoff retries incident_events lookup when no incident is linked yet.
