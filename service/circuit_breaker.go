@@ -14,7 +14,8 @@ const (
 	CircuitStateHalfOpen CircuitState = "half-open"
 )
 
-// NewCircuitBreaker trips open after maxFailures consecutive failures, stays open for timeout, then allows a single trial call.
+// CircuitBreaker trips open after maxFailures consecutive failures, stays
+// open for timeout, then allows a single trial call.
 type CircuitBreaker struct {
 	mu            sync.Mutex
 	state         CircuitState

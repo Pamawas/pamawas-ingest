@@ -516,7 +516,7 @@ func (h *Handler) GrafanaWebhook(w http.ResponseWriter, r *http.Request) {
 	// high-severity alert, a resolved event the alert-resolved message. The
 	// reporter owns severity gating and one-shot deduplication.
 	if !duplicate {
-		h.ForwardEventToReporter(context.Background(), eventID, webhookReq)
+		h.ForwardEventToReporter(eventID, webhookReq)
 	}
 
 	writeSuccessResponse(w, requestID, eventID, duplicate)
@@ -548,7 +548,7 @@ func (h *Handler) GenericWebhook(w http.ResponseWriter, r *http.Request) {
 
 	// Forward event-driven alerts (same semantics as the Grafana path).
 	if !duplicate {
-		h.ForwardEventToReporter(context.Background(), eventID, &req)
+		h.ForwardEventToReporter(eventID, &req)
 	}
 
 	writeSuccessResponse(w, requestID, eventID, duplicate)
@@ -653,6 +653,12 @@ func (h *Handler) circuitBreakerFor() *service.CircuitBreaker {
 // before correlation has run, so the incident_events link may not exist yet.
 var alertLinkBackoff = 10 * time.Second
 
+// alertLinkTimeout bounds how long a detached alert-forward goroutine waits
+// for the incident link to appear. It exceeds the backoff*retries window so a
+// normal correlation still succeeds, while guaranteeing the goroutine cannot
+// run forever.
+var alertLinkTimeout = 45 * time.Second
+
 // severityRank maps a severity to its ordering (matches the reporter and
 // scheduler). Unknown severities rank 0, below every valid level.
 func severityRank(severity string) int {
@@ -685,7 +691,7 @@ func severityRank(severity string) int {
 //
 // Fire-and-forget; the incident link may not exist yet (correlation runs
 // after ingest), so the lookup retries briefly.
-func (h *Handler) ForwardEventToReporter(ctx context.Context, eventID string, webhookReq *models.WebhookRequest) {
+func (h *Handler) ForwardEventToReporter(eventID string, webhookReq *models.WebhookRequest) {
 	if h.alertClient == nil {
 		return
 	}
@@ -712,7 +718,12 @@ func (h *Handler) ForwardEventToReporter(ctx context.Context, eventID string, we
 // tryForwardAlert resolves the incident link and dispatches the alert,
 // retrying briefly because correlation runs after ingest.
 func (h *Handler) tryForwardAlert(eventID string, webhookReq *models.WebhookRequest, sendAsync func(service.AlertPayload)) {
-	ctx := context.Background()
+	// Fire-and-forget: this goroutine must outlive the HTTP request so it can
+	// wait for correlation to link the incident. The request context would be
+	// cancelled before the retry completes, so use a detached context with a
+	// bounded deadline.
+	ctx, cancel := context.WithTimeout(context.Background(), alertLinkTimeout)
+	defer cancel()
 
 	var incidentID string
 	err := h.db.QueryRowContext(ctx, `SELECT incident_id FROM incident_events WHERE event_id = $1 LIMIT 1`, eventID).Scan(&incidentID)

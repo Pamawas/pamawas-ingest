@@ -1,7 +1,6 @@
 package handlers_test
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json"
 	"net/http"
@@ -133,7 +132,7 @@ func TestGrafanaWebhook_ResolvedForwardsAlert(t *testing.T) {
 	require.NoError(t, err)
 
 	// Forward the alert to the reporter directly (synchronously for the test).
-	th.ForwardEventToReporter(context.Background(), eventID, &models.WebhookRequest{Status: "resolved"})
+	th.ForwardEventToReporter(eventID, &models.WebhookRequest{Status: "resolved"})
 
 	// Verify the reporter received the resolved-alert POST.
 	select {
@@ -200,7 +199,7 @@ func TestGrafanaWebhook_FiringForwardsAlert(t *testing.T) {
 	_, err = db.ExecContext(t.Context(), `INSERT INTO incident_events (incident_id, event_id, correlation_reason, policy_version) VALUES ($1, $2, 'new_incident', 1)`, "inc_firing_1", eventID)
 	require.NoError(t, err)
 
-	th.ForwardEventToReporter(context.Background(), eventID, &models.WebhookRequest{Status: "firing"})
+	th.ForwardEventToReporter(eventID, &models.WebhookRequest{Status: "firing"})
 
 	select {
 	case receivedPayload := <-received:
@@ -261,7 +260,7 @@ func TestGrafanaWebhook_LowSeverityDoesNotForwardAlert(t *testing.T) {
 	_, err = db.ExecContext(t.Context(), `INSERT INTO incident_events (incident_id, event_id, correlation_reason, policy_version) VALUES ($1, $2, 'new_incident', 1)`, "inc_warning_1", resp.Data.EventID)
 	require.NoError(t, err)
 
-	th.ForwardEventToReporter(context.Background(), resp.Data.EventID, &models.WebhookRequest{Status: "firing", Severity: "warning"})
+	th.ForwardEventToReporter(resp.Data.EventID, &models.WebhookRequest{Status: "firing", Severity: "warning"})
 
 	select {
 	case <-called:
