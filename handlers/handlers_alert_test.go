@@ -252,3 +252,59 @@ func TestGrafanaWebhook_LowSeverityDoesNotForwardAlert(t *testing.T) {
 		// Expected: the gate dropped it before any lookup or HTTP call.
 	}
 }
+
+// TestGrafanaWebhook_NamesTheTargetNotTheSender is the regression test for
+// ambiguous alerts. Grafana's default alerting payload has no service tag; it
+// names the target in `instance` and the scrape job in `job`. The old code
+// defaulted the service to the literal "grafana", so every alert read
+// "Services: grafana" and never said what was actually down.
+func TestGrafanaWebhook_NamesTheTargetNotTheSender(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	received := make(chan map[string]interface{}, 1)
+	reporter := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]interface{}
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&payload))
+		received <- payload
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"sent":true}`))
+	}))
+	defer reporter.Close()
+
+	th := newTestHandlerWithAlerts(t, db, reporter.URL)
+
+	// Grafana default alerting format: no tags.service anywhere.
+	payload := map[string]interface{}{
+		"alerts": []interface{}{
+			map[string]interface{}{
+				"status":      "firing",
+				"fingerprint": "24188862b3fad691",
+				"startsAt":    time.Now().UTC().Format(time.RFC3339),
+				"labels": map[string]interface{}{
+					"alertname": "Monitoring Target Down",
+					"severity":  "critical",
+					"instance":  "last-labs",
+					"job":       "docker_cadvisor",
+				},
+			},
+		},
+	}
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	w := th.makeRequest("POST", "/api/v1/webhooks/grafana", body, map[string]string{
+		"Content-Type":  "application/json",
+		"Authorization": "Bearer test-token",
+	})
+	require.Equal(t, http.StatusAccepted, w.Code, w.Body.String())
+
+	select {
+	case p := <-received:
+		assert.Equal(t, "last-labs", p["target"], "alert must name the target")
+		assert.Equal(t, "docker_cadvisor", p["job"], "alert must name the scrape job")
+		assert.NotEqual(t, "grafana", p["services"], "the sender is not the affected service")
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for the reporter to receive the alert")
+	}
+}

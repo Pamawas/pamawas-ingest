@@ -32,6 +32,13 @@ type WebhookRequest struct {
 	Type          string                 `json:"type"`
 	OccurredAt    string                 `json:"occurred_at"`
 	Service       string                 `json:"service"`
+	// The concrete entity the alert is about (Grafana: the `instance` label,
+	// falling back to `job`). This is what tells a human what is down; a
+	// Grafana alert's default payload names no service at all.
+	Target string `json:"target,omitempty"`
+	// The scrape job that produced the alert (Grafana: the `job` label).
+	Job string `json:"job,omitempty"`
+
 	Environment   string                 `json:"environment"`
 	Severity      string                 `json:"severity,omitempty"`
 	Title         string                 `json:"title,omitempty"`
@@ -131,10 +138,9 @@ func ValidateWebhookRequest(req *WebhookRequest) []ErrorDetail {
 		details = append(details, ErrorDetail{Field: "occurred_at", Reason: "must be RFC3339"})
 	}
 
-	if req.Service == "" {
-		details = append(details, ErrorDetail{Field: "service", Reason: "required"})
-	}
-
+	// Service is optional at this layer: Grafana's default payload names no
+	// service, only a target and job. The generic webhook enforces it at its
+	// own boundary, where the caller controls the payload shape.
 	if req.Environment == "" {
 		details = append(details, ErrorDetail{Field: "environment", Reason: "required"})
 	}
@@ -231,12 +237,22 @@ func (g *GrafanaWebhookRequest) ToWebhookRequest() *WebhookRequest {
 		occurredAt = g.EvalMatches[0].Time
 	}
 
-	var service string
+	// The monitored entity. Grafana's default alert payload has no `service`
+	// label at all — its labels name the target (`instance`) and the scrape
+	// job (`job`). Deriving the service from those is truthful; defaulting to
+	// the literal "grafana" was not, because that names the sender and made
+	// every alert read "Services: grafana", telling the reader nothing about
+	// what was actually down.
+	var service, target, job string
 	if g.Tags != nil {
-		service = g.Tags["service"]
+		service = firstNonEmpty(g.Tags["service"], g.Tags["service_name"])
+		target = firstNonEmpty(g.Tags["instance"], g.Tags["job"])
+		job = g.Tags["job"]
 	}
+	// Correlation and enrichment key on the affected entity: the service when
+	// the alert names one, otherwise the target it is about.
 	if service == "" {
-		service = "grafana"
+		service = target
 	}
 
 	severity := "warning"
@@ -282,6 +298,8 @@ func (g *GrafanaWebhookRequest) ToWebhookRequest() *WebhookRequest {
 		Type:          "alert",
 		OccurredAt:    occurredAt,
 		Service:       service,
+		Target:        target,
+		Job:           job,
 		Environment:   "production", // default, will be overridden by source config
 		Severity:      severity,
 		Title:         g.RuleName,
@@ -289,6 +307,16 @@ func (g *GrafanaWebhookRequest) ToWebhookRequest() *WebhookRequest {
 		Labels:        labels,
 		RawPayload:    g.RawPayload,
 	}
+}
+
+// firstNonEmpty returns the first non-empty value, or "" when none is set.
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // MarshalJSON implements custom JSON marshaling for WebhookRequest

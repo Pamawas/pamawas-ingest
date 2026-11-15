@@ -129,7 +129,10 @@ func TestValidateWebhookRequest(t *testing.T) {
 			expectedFields: []string{"occurred_at"},
 		},
 		{
-			name: "missing service",
+			// Grafana's default alerting payload names no service, only a
+			// target and job, so an absent service is not a validation error
+			// at this layer. The generic webhook enforces it at its boundary.
+			name: "service is optional",
 			req: &WebhookRequest{
 				SchemaVersion: 1,
 				Type:          "event",
@@ -137,8 +140,7 @@ func TestValidateWebhookRequest(t *testing.T) {
 				Environment:   "prod",
 				Title:         "Test",
 			},
-			expectedCount:  1,
-			expectedFields: []string{"service"},
+			expectedCount: 0,
 		},
 		{
 			name: "missing environment",
@@ -276,7 +278,7 @@ func TestValidateWebhookRequest(t *testing.T) {
 				Title:         "",
 				Status:        "bad",
 			},
-			expectedCount: 8,
+			expectedCount: 7,
 		},
 	}
 

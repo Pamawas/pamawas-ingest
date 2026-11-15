@@ -312,7 +312,14 @@ func parseTags(tags map[string]interface{}) map[string]string {
 	return result
 }
 
-// validateGrafanaRequest validates required fields in the converted webhook request
+// validateGrafanaRequest validates required fields in the converted webhook request.
+//
+// The service is deliberately NOT required. Grafana's default alerting payload
+// names no service: its labels carry the target (`instance`) and scrape job
+// (`job`), and some alerts carry neither. Requiring a service forced a fake
+// "grafana" value, which then propagated into every alert and incident as if
+// Grafana itself were the affected service. The alert name is the identity
+// Grafana always provides, so that is what we require.
 func (h *Handler) validateGrafanaRequest(w http.ResponseWriter, requestID, endpoint string, webhookReq *models.WebhookRequest) bool {
 	if webhookReq.OccurredAt == "" {
 		h.metrics.WebhookRequestsTotal.WithLabelValues(endpoint, "422").Inc()
@@ -320,10 +327,10 @@ func (h *Handler) validateGrafanaRequest(w http.ResponseWriter, requestID, endpo
 			[]models.ErrorDetail{{Field: "timestamp", Reason: "required"}})
 		return false
 	}
-	if webhookReq.Service == "" {
+	if webhookReq.Title == "" {
 		h.metrics.WebhookRequestsTotal.WithLabelValues(endpoint, "422").Inc()
-		writeErrorResponse(w, requestID, http.StatusUnprocessableEntity, "invalid_request", "Missing service",
-			[]models.ErrorDetail{{Field: "service", Reason: "required (from tags.service)"}})
+		writeErrorResponse(w, requestID, http.StatusUnprocessableEntity, "invalid_request", "Missing alert name",
+			[]models.ErrorDetail{{Field: "ruleName", Reason: "required (the alert's identity)"}})
 		return false
 	}
 	return true
@@ -536,6 +543,16 @@ func (h *Handler) GenericWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Generic callers own their payload shape, so they must name the affected
+	// service. (Grafana's default alerting payload cannot, and is accepted
+	// without one on the Grafana path.)
+	if req.Service == "" {
+		h.metrics.WebhookRequestsTotal.WithLabelValues(endpoint, "422").Inc()
+		writeErrorResponse(w, requestID, http.StatusUnprocessableEntity, "invalid_request", "Missing service",
+			[]models.ErrorDetail{{Field: "service", Reason: "required"}})
+		return
+	}
+
 	// Get idempotency key from header
 	idempotencyKey := r.Header.Get("X-Idempotency-Key")
 
@@ -704,14 +721,15 @@ func (h *Handler) ForwardEventToReporter(eventID string, webhookReq *models.Webh
 		return
 	}
 
-	services := webhookReq.Service
 	payload := service.AlertPayload{
 		RequestID:       webhookReq.SourceEventID,
 		ContractVersion: 1,
 		Title:           webhookReq.Title,
 		Severity:        webhookReq.Severity,
 		Environment:     webhookReq.Environment,
-		Services:        services,
+		Services:        webhookReq.Service,
+		Target:          webhookReq.Target,
+		Job:             webhookReq.Job,
 		StartedAt:       webhookReq.OccurredAt,
 		DedupKey:        alertDedupKey(webhookReq),
 	}
