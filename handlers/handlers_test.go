@@ -65,6 +65,10 @@ func newTestHandler(t *testing.T, db *sql.DB) *TestHandler {
 		WebhookToken:                   "test-token",
 		MaxBodyBytes:                   1048576,
 		TestMode:                       true,
+		RateLimitRPS:                   1000,
+		RateLimitBurst:                 2000,
+		WebhookRateLimitRPS:            1000,
+		WebhookRateLimitBurst:          2000,
 		CircuitBreakerFailureThreshold: 3,
 		CircuitBreakerResetTimeout:     30 * time.Second,
 	}
