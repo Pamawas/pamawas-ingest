@@ -308,3 +308,41 @@ func TestGrafanaWebhook_NamesTheTargetNotTheSender(t *testing.T) {
 		t.Fatal("timed out waiting for the reporter to receive the alert")
 	}
 }
+
+// TestGenericWebhookRequiresService pins where the service requirement lives.
+// Grafana's default alerting payload names no service, so the shared validator
+// cannot require one; generic callers control their own payload shape, so the
+// generic endpoint enforces it at its boundary. The check runs before any
+// database access, so this needs no live PostgreSQL.
+func TestGenericWebhookRequiresService(t *testing.T) {
+	th := newTestHandler(t, nil)
+
+	body, err := json.Marshal(map[string]interface{}{
+		"schema_version": 1,
+		"type":           "event",
+		"occurred_at":    time.Now().UTC().Format(time.RFC3339),
+		"environment":    "production",
+		"title":          "Deploy finished",
+		"severity":       "info",
+		"status":         "informational",
+	})
+	require.NoError(t, err)
+
+	w := th.makeRequest("POST", "/api/v1/webhooks/generic", body, map[string]string{
+		"Content-Type":  "application/json",
+		"Authorization": "Bearer test-token",
+	})
+
+	require.Equal(t, http.StatusUnprocessableEntity, w.Code, w.Body.String())
+
+	var resp struct {
+		Error struct {
+			Details []struct {
+				Field string `json:"field"`
+			} `json:"details"`
+		} `json:"error"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp.Error.Details, 1)
+	assert.Equal(t, "service", resp.Error.Details[0].Field)
+}

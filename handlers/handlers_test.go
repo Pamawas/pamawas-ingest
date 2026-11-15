@@ -659,7 +659,11 @@ func TestGenericWebhook_ValidationErrors(t *testing.T) {
 			expectedField: "occurred_at",
 		},
 		{
-			name: "missing service",
+			// Grafana's default alerting payload names no service, only a
+			// target and job, so this shared validator cannot require one.
+			// The generic webhook enforces it at its own boundary instead;
+			// see TestGenericWebhookRequiresService.
+			name: "missing service is allowed",
 			req: models.WebhookRequest{
 				SchemaVersion: 1,
 				Type:          "event",
@@ -667,7 +671,7 @@ func TestGenericWebhook_ValidationErrors(t *testing.T) {
 				Environment:   "prod",
 				Title:         "Test",
 			},
-			expectedField: "service",
+			expectedField: "",
 		},
 		{
 			name: "missing environment",
@@ -818,8 +822,9 @@ func TestGenericWebhook_ValidationErrors(t *testing.T) {
 			details := models.ValidateWebhookRequest(&req)
 
 			if tt.name == "multiple errors" {
-				// Expect 8 errors for the multiple errors test case
-				assert.Len(t, details, 8, "Error count mismatch")
+				// 7 errors: schema_version, type, occurred_at, environment,
+				// severity, title, status. Service is no longer one of them.
+				assert.Len(t, details, 7, "Error count mismatch")
 				return
 			}
 
