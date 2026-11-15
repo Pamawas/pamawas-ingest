@@ -13,17 +13,16 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// AlertClient forwards incident lifecycle alerts to the reporter, which
-// owns the delivery channels and their credentials:
+// AlertClient forwards alert lifecycle messages to the reporter, which owns
+// the delivery channels and their credentials:
 //
-//   - /api/v1/alerts          — immediate high-severity alert when an
-//     incident starts firing (event-driven, so the user is notified as soon
-//     as the incident exists rather than on the scheduler's next poll);
-//   - /api/v1/alerts/resolved — alert-resolved message when the
-//     incident recovers.
+//   - /api/v1/alerts          — immediate high-severity alert when an event
+//     fires (event-driven, so the user is notified as soon as the webhook is
+//     persisted rather than on the correlator's or scheduler's next cycle);
+//   - /api/v1/alerts/resolved — alert-resolved message when it recovers.
 //
-// Severity gating and one-shot deduplication live in the reporter, next to
-// the channel configuration and the incident row they need.
+// The payload is event-sourced: at alert time the incident does not exist yet,
+// so the alert carries the event's own details and is deduplicated by key.
 type AlertClient struct {
 	httpClient *http.Client
 	baseURL    string
@@ -46,25 +45,23 @@ func NewAlertClient(baseURL string, timeout time.Duration, ctx context.Context) 
 // event's own details rather than an incident id: the correlator has not
 // created the incident yet, and an immediate alert must not wait for it.
 type AlertPayload struct {
-	IncidentID      string `json:"incident_id,omitempty"`
 	RequestID       string `json:"request_id"`
 	ContractVersion int    `json:"contract_version"`
 
-	Title       string `json:"title,omitempty"`
-	Severity    string `json:"severity,omitempty"`
+	Title       string `json:"title"`
+	Severity    string `json:"severity"`
 	Environment string `json:"environment,omitempty"`
 	Services    string `json:"services,omitempty"`
 	StartedAt   string `json:"started_at,omitempty"`
-	DedupKey    string `json:"dedup_key,omitempty"`
+	DedupKey    string `json:"dedup_key"`
 }
 
 // AlertResponse mirrors the reporter's alert response.
 type AlertResponse struct {
-	IncidentID string `json:"incident_id"`
-	Sent       bool   `json:"sent"`
-	Skipped    bool   `json:"skipped"`
-	Reason     string `json:"reason,omitempty"`
-	Message    string `json:"message"`
+	Sent    bool   `json:"sent"`
+	Skipped bool   `json:"skipped"`
+	Reason  string `json:"reason,omitempty"`
+	Message string `json:"message"`
 }
 
 // SendAlert asks the reporter to send the immediate high-severity alert.
@@ -127,14 +124,14 @@ func (n *AlertClient) sendAsync(kind string, send func(context.Context, AlertPay
 		defer func() {
 			if r := recover(); r != nil {
 				log.Error().Interface("panic", r).
-					Str("incident_id", payload.IncidentID).
+					Str("dedup_key", payload.DedupKey).
 					Str("kind", kind).
 					Msg("Recovered panic sending alert to reporter")
 			}
 		}()
 		if _, err := send(n.ctx, payload); err != nil {
 			log.Error().Err(err).
-				Str("incident_id", payload.IncidentID).
+				Str("dedup_key", payload.DedupKey).
 				Str("kind", kind).
 				Msg("Failed to send alert to reporter")
 		}
