@@ -648,17 +648,6 @@ func (h *Handler) circuitBreakerFor() *service.CircuitBreaker {
 	return h.circuitBreakers["database"]
 }
 
-// alertLinkBackoff is the delay between retries when looking up the incident
-// an event belongs to. The reporter forwards live in the webhook handler
-// before correlation has run, so the incident_events link may not exist yet.
-var alertLinkBackoff = 10 * time.Second
-
-// alertLinkTimeout bounds how long a detached alert-forward goroutine waits
-// for the incident link to appear. It exceeds the backoff*retries window so a
-// normal correlation still succeeds, while guaranteeing the goroutine cannot
-// run forever.
-var alertLinkTimeout = 45 * time.Second
-
 // severityRank maps a severity to its ordering (matches the reporter and
 // scheduler). Unknown severities rank 0, below every valid level.
 func severityRank(severity string) int {
@@ -678,19 +667,20 @@ func severityRank(severity string) int {
 	}
 }
 
-// ForwardEventToReporter forwards an event-driven alert to the reporter for
-// the incident the event belongs to:
+// ForwardEventToReporter forwards an event-driven alert to the reporter the
+// moment the event is persisted:
 //
 //   - firing   -> immediate high-severity alert (/api/v1/alerts)
 //   - resolved -> alert-resolved message (/api/v1/alerts/resolved)
 //
-// Only events at or above the configured HIGH_SEVERITY_THRESHOLD are
-// forwarded (default "high" => high/critical); the reporter re-checks the
-// same threshold authoritatively, so a misconfiguration here never causes an
-// out-of-policy alert.
+// It deliberately does NOT wait for the correlator. The incident does not exist
+// yet — the correlator creates it on its own cycle — and blocking on that made
+// immediate alerts arrive up to a minute late, or get dropped entirely when the
+// cycle ran past the wait. The alert is built from the event's own details; the
+// incident-scoped follow-up report is the scheduler's job later.
 //
-// Fire-and-forget; the incident link may not exist yet (correlation runs
-// after ingest), so the lookup retries briefly.
+// Only events at or above HIGH_SEVERITY_THRESHOLD are forwarded (default
+// "high" => high/critical); the reporter re-checks the same threshold.
 func (h *Handler) ForwardEventToReporter(eventID string, webhookReq *models.WebhookRequest) {
 	if h.alertClient == nil {
 		return
@@ -703,6 +693,7 @@ func (h *Handler) ForwardEventToReporter(eventID string, webhookReq *models.Webh
 			Msg("Event severity below threshold; skipping alert forward")
 		return
 	}
+
 	var sendAsync func(payload service.AlertPayload)
 	switch webhookReq.Status {
 	case "firing":
@@ -712,52 +703,47 @@ func (h *Handler) ForwardEventToReporter(eventID string, webhookReq *models.Webh
 	default:
 		return
 	}
-	go h.tryForwardAlert(eventID, webhookReq, sendAsync)
+
+	services := webhookReq.Service
+	payload := service.AlertPayload{
+		RequestID:       webhookReq.SourceEventID,
+		ContractVersion: 1,
+		Title:           webhookReq.Title,
+		Severity:        webhookReq.Severity,
+		Environment:     webhookReq.Environment,
+		Services:        services,
+		StartedAt:       webhookReq.OccurredAt,
+		DedupKey:        alertDedupKey(webhookReq),
+	}
+	if payload.RequestID == "" {
+		payload.RequestID = eventID
+	}
+	if payload.Title == "" {
+		payload.Title = webhookReq.Service
+	}
+
+	sendAsync(payload)
+	log.Info().
+		Str("event_id", eventID).
+		Str("status", webhookReq.Status).
+		Str("severity", webhookReq.Severity).
+		Msg("Alert forwarded to reporter")
 }
 
-// tryForwardAlert resolves the incident link and dispatches the alert,
-// retrying briefly because correlation runs after ingest.
-func (h *Handler) tryForwardAlert(eventID string, webhookReq *models.WebhookRequest, sendAsync func(service.AlertPayload)) {
-	// Fire-and-forget: this goroutine must outlive the HTTP request so it can
-	// wait for correlation to link the incident. The request context would be
-	// cancelled before the retry completes, so use a detached context with a
-	// bounded deadline.
-	ctx, cancel := context.WithTimeout(context.Background(), alertLinkTimeout)
-	defer cancel()
-
-	var incidentID string
-	err := h.db.QueryRowContext(ctx, `SELECT incident_id FROM incident_events WHERE event_id = $1 LIMIT 1`, eventID).Scan(&incidentID)
-	if err == nil {
-		h.sendAlert(eventID, incidentID, webhookReq, sendAsync)
-		return
+// alertDedupKey identifies the alerting condition across Grafana re-fires.
+//
+// Grafana re-sends the same alert every evaluation interval. The fingerprint is
+// stable for a given alert definition/labels, so it collapses repeats into one
+// notification; when the alert resolves, the reporter releases the claim and a
+// later re-fire alerts again.
+func alertDedupKey(req *models.WebhookRequest) string {
+	if fp := req.Labels["grafana_fingerprint"]; fp != "" {
+		return "grafana:" + fp
 	}
-	if err != sql.ErrNoRows {
-		log.Error().Err(err).Str("event_id", eventID).Msg("Error looking up incident for event; skipping alert forward")
-		return
+	if req.SourceEventID != "" {
+		return "event:" + req.SourceEventID
 	}
-
-	log.Debug().Str("event_id", eventID).Msg("No incident linked to event yet; retrying")
-	for i := 0; i < 3; i++ {
-		select {
-		case <-ctx.Done():
-			log.Warn().Str("event_id", eventID).Msg("Context cancelled while waiting for incident link; skipping alert forward")
-			return
-		case <-time.After(alertLinkBackoff):
-		}
-
-		err = h.db.QueryRowContext(ctx, `SELECT incident_id FROM incident_events WHERE event_id = $1 LIMIT 1`, eventID).Scan(&incidentID)
-		if err == nil {
-			h.sendAlert(eventID, incidentID, webhookReq, sendAsync)
-			return
-		}
-		if err != sql.ErrNoRows {
-			log.Error().Err(err).Str("event_id", eventID).Msg("Error looking up incident for event; skipping alert forward")
-			return
-		}
-		log.Debug().Str("event_id", eventID).Msg("Still no incident linked to event; retrying")
-	}
-
-	log.Warn().Str("event_id", eventID).Msg("No incident linked to event after retries; skipping alert forward")
+	return "service:" + req.Service + ":" + req.Title
 }
 
 // sendAlert builds the alert payload and dispatches it fire-and-forget.

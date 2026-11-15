@@ -41,10 +41,21 @@ func NewAlertClient(baseURL string, timeout time.Duration, ctx context.Context) 
 }
 
 // AlertPayload mirrors the reporter's alert payload.
+//
+// Ingest fires alerts from the event it just persisted, so it carries the
+// event's own details rather than an incident id: the correlator has not
+// created the incident yet, and an immediate alert must not wait for it.
 type AlertPayload struct {
-	IncidentID      string `json:"incident_id"`
+	IncidentID      string `json:"incident_id,omitempty"`
 	RequestID       string `json:"request_id"`
 	ContractVersion int    `json:"contract_version"`
+
+	Title       string `json:"title,omitempty"`
+	Severity    string `json:"severity,omitempty"`
+	Environment string `json:"environment,omitempty"`
+	Services    string `json:"services,omitempty"`
+	StartedAt   string `json:"started_at,omitempty"`
+	DedupKey    string `json:"dedup_key,omitempty"`
 }
 
 // AlertResponse mirrors the reporter's alert response.

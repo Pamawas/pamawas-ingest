@@ -88,10 +88,6 @@ func TestGrafanaWebhook_ResolvedForwardsAlert(t *testing.T) {
 
 	th := newTestHandlerWithAlerts(t, db, reporter.URL)
 
-	// Insert an incident (linked to the event via incident_events after it exists).
-	_, err := db.ExecContext(t.Context(), `INSERT INTO incidents (id, title, status, started_at, last_event_at, resolved_at, severity, environment, affected_services, correlation_policy, correlation_version) VALUES ($1,'High CPU','resolved',$2,$3,$4,'critical','production','{}','policy',1)`, "inc_resolved_1", time.Now().Add(-time.Hour), time.Now(), time.Now())
-	require.NoError(t, err)
-
 	payload := map[string]interface{}{
 		"ruleName":  "High CPU Usage",
 		"timestamp": time.Now().UTC().Format(time.RFC3339),
@@ -127,12 +123,12 @@ func TestGrafanaWebhook_ResolvedForwardsAlert(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, count)
 
-	// Link the event to the incident (as the correlator would).
-	_, err = db.ExecContext(t.Context(), `INSERT INTO incident_events (incident_id, event_id, correlation_reason, policy_version) VALUES ($1, $2, 'resolution_of_open_incident', 1)`, "inc_resolved_1", eventID)
-	require.NoError(t, err)
-
 	// Forward the alert to the reporter directly (synchronously for the test).
-	th.ForwardEventToReporter(eventID, &models.WebhookRequest{Status: "resolved"})
+	th.ForwardEventToReporter(eventID, &models.WebhookRequest{
+		Status: "resolved", Severity: "critical", Service: "payment-api",
+		Environment: "production", Title: "High CPU Usage",
+		OccurredAt: time.Now().UTC().Format(time.RFC3339),
+	})
 
 	// Verify the reporter received the resolved-alert POST.
 	select {
@@ -164,9 +160,6 @@ func TestGrafanaWebhook_FiringForwardsAlert(t *testing.T) {
 
 	th := newTestHandlerWithAlerts(t, db, reporter.URL)
 
-	_, err := db.ExecContext(t.Context(), `INSERT INTO incidents (id, title, status, started_at, last_event_at, resolved_at, severity, environment, affected_services, correlation_policy, correlation_version) VALUES ($1,'High CPU','open',$2,$2,NULL,'critical','production','{}','policy',1)`, "inc_firing_1", time.Now())
-	require.NoError(t, err)
-
 	payload := map[string]interface{}{
 		"ruleName":  "High CPU Usage",
 		"timestamp": time.Now().UTC().Format(time.RFC3339),
@@ -196,10 +189,11 @@ func TestGrafanaWebhook_FiringForwardsAlert(t *testing.T) {
 	eventID := resp.Data.EventID
 	require.NotEmpty(t, eventID)
 
-	_, err = db.ExecContext(t.Context(), `INSERT INTO incident_events (incident_id, event_id, correlation_reason, policy_version) VALUES ($1, $2, 'new_incident', 1)`, "inc_firing_1", eventID)
-	require.NoError(t, err)
-
-	th.ForwardEventToReporter(eventID, &models.WebhookRequest{Status: "firing"})
+	th.ForwardEventToReporter(eventID, &models.WebhookRequest{
+		Status: "firing", Severity: "critical", Service: "payment-api",
+		Environment: "production", Title: "High CPU Usage",
+		OccurredAt: time.Now().UTC().Format(time.RFC3339),
+	})
 
 	select {
 	case receivedPayload := <-received:
@@ -254,13 +248,12 @@ func TestGrafanaWebhook_LowSeverityDoesNotForwardAlert(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	require.NotEmpty(t, resp.Data.EventID)
 
-	// Even with the incident link present, the gate must stop the forward.
-	_, err = db.ExecContext(t.Context(), `INSERT INTO incidents (id, title, status, started_at, last_event_at, resolved_at, severity, environment, affected_services, correlation_policy, correlation_version) VALUES ($1,'Disk usage warning','open',$2,$2,NULL,'warning','production','{}','policy',1)`, "inc_warning_1", time.Now())
-	require.NoError(t, err)
-	_, err = db.ExecContext(t.Context(), `INSERT INTO incident_events (incident_id, event_id, correlation_reason, policy_version) VALUES ($1, $2, 'new_incident', 1)`, "inc_warning_1", resp.Data.EventID)
-	require.NoError(t, err)
-
-	th.ForwardEventToReporter(resp.Data.EventID, &models.WebhookRequest{Status: "firing", Severity: "warning"})
+	// The gate must stop the forward before any lookup or HTTP call.
+	th.ForwardEventToReporter(resp.Data.EventID, &models.WebhookRequest{
+		Status: "firing", Severity: "warning", Service: "payment-api",
+		Environment: "production", Title: "Disk usage warning",
+		OccurredAt: time.Now().UTC().Format(time.RFC3339),
+	})
 
 	select {
 	case <-called:
