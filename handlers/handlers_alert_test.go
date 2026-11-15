@@ -40,6 +40,7 @@ func newTestHandlerWithAlerts(t *testing.T, db *sql.DB, reporterURL string) *Tes
 		WebhookRateLimitBurst:          2000,
 		CircuitBreakerFailureThreshold: 3,
 		CircuitBreakerResetTimeout:     30 * time.Second,
+		HighSeverityThreshold:          "high",
 	}
 
 	reg := prometheus.NewRegistry()
@@ -206,5 +207,66 @@ func TestGrafanaWebhook_FiringForwardsAlert(t *testing.T) {
 		assert.Equal(t, "inc_firing_1", receivedPayload["incident_id"])
 	case <-time.After(10 * time.Second):
 		t.Fatal("timed out waiting for reporter to receive firing alert")
+	}
+}
+
+// TestGrafanaWebhook_LowSeverityDoesNotForwardAlert verifies the env-driven
+// severity gate: a firing event below HIGH_SEVERITY_THRESHOLD must not reach
+// the reporter at all (no wasted HTTP call), while high/critical does.
+func TestGrafanaWebhook_LowSeverityDoesNotForwardAlert(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	called := make(chan struct{}, 1)
+	reporter := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called <- struct{}{}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"sent":true}`))
+	}))
+	defer reporter.Close()
+
+	th := newTestHandlerWithAlerts(t, db, reporter.URL)
+
+	payload := map[string]interface{}{
+		"ruleName":  "Disk usage warning",
+		"timestamp": time.Now().UTC().Format(time.RFC3339),
+		"status":    "firing",
+		"state":     "alerting",
+		"tags": map[string]interface{}{
+			"service":   "payment-api",
+			"severity":  "warning",
+			"namespace": "payments",
+		},
+	}
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	w := th.makeRequest("POST", "/api/v1/webhooks/grafana", body, map[string]string{
+		"Content-Type":  "application/json",
+		"Authorization": "Bearer test-token",
+	})
+	assert.Equal(t, http.StatusAccepted, w.Code)
+
+	var resp struct {
+		Data struct {
+			EventID string `json:"event_id"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.NotEmpty(t, resp.Data.EventID)
+
+	// Even with the incident link present, the gate must stop the forward.
+	_, err = db.ExecContext(t.Context(), `INSERT INTO incidents (id, title, status, started_at, last_event_at, resolved_at, severity, environment, affected_services, correlation_policy, correlation_version) VALUES ($1,'Disk usage warning','open',$2,$2,NULL,'warning','production','{}','policy',1)`, "inc_warning_1", time.Now())
+	require.NoError(t, err)
+	_, err = db.ExecContext(t.Context(), `INSERT INTO incident_events (incident_id, event_id, correlation_reason, policy_version) VALUES ($1, $2, 'new_incident', 1)`, "inc_warning_1", resp.Data.EventID)
+	require.NoError(t, err)
+
+	th.ForwardEventToReporter(context.Background(), resp.Data.EventID, &models.WebhookRequest{Status: "firing", Severity: "warning"})
+
+	select {
+	case <-called:
+		t.Fatal("reporter was called for a below-threshold severity")
+	case <-time.After(500 * time.Millisecond):
+		// Expected: the gate dropped it before any lookup or HTTP call.
 	}
 }
