@@ -746,25 +746,6 @@ func alertDedupKey(req *models.WebhookRequest) string {
 	return "service:" + req.Service + ":" + req.Title
 }
 
-// sendAlert builds the alert payload and dispatches it fire-and-forget.
-func (h *Handler) sendAlert(eventID, incidentID string, webhookReq *models.WebhookRequest, sendAsync func(service.AlertPayload)) {
-	payload := service.AlertPayload{
-		IncidentID:      incidentID,
-		RequestID:       webhookReq.SourceEventID,
-		ContractVersion: 1,
-	}
-	if payload.RequestID == "" {
-		payload.RequestID = eventID
-	}
-
-	sendAsync(payload)
-	log.Info().
-		Str("event_id", eventID).
-		Str("incident_id", incidentID).
-		Str("status", webhookReq.Status).
-		Msg("Alert forwarded to reporter")
-}
-
 // RecoverStalledIdempotencyHandler reclaims idempotency records stuck in "processing" past expiration.
 func (h *Handler) RecoverStalledIdempotencyHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
