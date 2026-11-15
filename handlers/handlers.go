@@ -761,6 +761,11 @@ func alertDedupKey(req *models.WebhookRequest) string {
 	if req.SourceEventID != "" {
 		return "event:" + req.SourceEventID
 	}
+	// No fingerprint and no source id: the alert's own name is the only stable
+	// identity, and it is the same identity the correlator groups on.
+	if req.Service == "" {
+		return "alert:" + req.Title
+	}
 	return "service:" + req.Service + ":" + req.Title
 }
 
