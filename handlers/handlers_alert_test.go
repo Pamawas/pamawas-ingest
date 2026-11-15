@@ -12,7 +12,6 @@ import (
 	"github.com/Pamawas/pamawas-ingest/handlers"
 	"github.com/Pamawas/pamawas-ingest/metrics"
 	"github.com/Pamawas/pamawas-ingest/middleware"
-	"github.com/Pamawas/pamawas-ingest/models"
 	"github.com/gorilla/mux"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
@@ -116,25 +115,24 @@ func TestGrafanaWebhook_ResolvedForwardsAlert(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	require.NotEmpty(t, resp.Data.EventID)
-	eventID := resp.Data.EventID
 
 	var count int
 	err = db.QueryRow("SELECT COUNT(*) FROM events WHERE source = 'grafana'").Scan(&count)
 	require.NoError(t, err)
 	assert.Equal(t, 1, count)
 
-	// Forward the alert to the reporter directly (synchronously for the test).
-	th.ForwardEventToReporter(eventID, &models.WebhookRequest{
-		Status: "resolved", Severity: "critical", Service: "payment-api",
-		Environment: "production", Title: "High CPU Usage",
-		OccurredAt: time.Now().UTC().Format(time.RFC3339),
-	})
-
-	// Verify the reporter received the resolved-alert POST.
+	// The webhook handler forwards the alert itself (fire-and-forget); no
+	// correlator link is needed because the payload is event-sourced.
 	select {
 	case receivedPayload := <-received:
-		assert.Equal(t, "inc_resolved_1", receivedPayload["incident_id"])
+		assert.Equal(t, "High CPU Usage", receivedPayload["title"])
+		assert.Equal(t, "critical", receivedPayload["severity"])
+		assert.Equal(t, "production", receivedPayload["environment"])
 		assert.Equal(t, 1, int(receivedPayload["contract_version"].(float64)))
+		// No incident exists yet at alert time.
+		assert.Nil(t, receivedPayload["incident_id"])
+		// A dedup key must be present so repeat fires collapse to one alert.
+		assert.NotEmpty(t, receivedPayload["dedup_key"])
 	case <-time.After(10 * time.Second):
 		t.Fatal("timed out waiting for reporter to receive resolved alert")
 	}
@@ -189,15 +187,13 @@ func TestGrafanaWebhook_FiringForwardsAlert(t *testing.T) {
 	eventID := resp.Data.EventID
 	require.NotEmpty(t, eventID)
 
-	th.ForwardEventToReporter(eventID, &models.WebhookRequest{
-		Status: "firing", Severity: "critical", Service: "payment-api",
-		Environment: "production", Title: "High CPU Usage",
-		OccurredAt: time.Now().UTC().Format(time.RFC3339),
-	})
-
 	select {
 	case receivedPayload := <-received:
-		assert.Equal(t, "inc_firing_1", receivedPayload["incident_id"])
+		assert.Equal(t, "High CPU Usage", receivedPayload["title"])
+		assert.Equal(t, "critical", receivedPayload["severity"])
+		assert.Equal(t, "production", receivedPayload["environment"])
+		assert.Nil(t, receivedPayload["incident_id"], "alert fires before correlation creates an incident")
+		assert.NotEmpty(t, receivedPayload["dedup_key"])
 	case <-time.After(10 * time.Second):
 		t.Fatal("timed out waiting for reporter to receive firing alert")
 	}
@@ -248,13 +244,7 @@ func TestGrafanaWebhook_LowSeverityDoesNotForwardAlert(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	require.NotEmpty(t, resp.Data.EventID)
 
-	// The gate must stop the forward before any lookup or HTTP call.
-	th.ForwardEventToReporter(resp.Data.EventID, &models.WebhookRequest{
-		Status: "firing", Severity: "warning", Service: "payment-api",
-		Environment: "production", Title: "Disk usage warning",
-		OccurredAt: time.Now().UTC().Format(time.RFC3339),
-	})
-
+	// The webhook handler's own forward must be gated out: no HTTP call.
 	select {
 	case <-called:
 		t.Fatal("reporter was called for a below-threshold severity")
