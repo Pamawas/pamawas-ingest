@@ -77,8 +77,8 @@ func Load() Config {
 		ReporterURL:  v.GetString("reporter_url"),
 	}
 
-	if cfg.DatabaseURL == "" {
-		panic("DATABASE_URL not set (config file or PAMAWAS_INGEST_DATABASE_URL / DATABASE_URL env var)")
+	if err := cfg.Validate(); err != nil {
+		panic(fmt.Sprintf("invalid configuration: %v", err))
 	}
 	return cfg
 }
@@ -92,6 +92,9 @@ func (c Config) Validate() error {
 	}
 	if c.MaxBodyBytes <= 0 {
 		return fmt.Errorf("max_body_bytes must be positive")
+	}
+	if !c.TestMode && c.WebhookToken == "" {
+		return fmt.Errorf("webhook_token is required outside test mode (set PAMAWAS_WEBHOOK_TOKEN or enable TEST_MODE)")
 	}
 	return nil
 }
