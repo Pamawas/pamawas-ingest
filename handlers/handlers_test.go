@@ -83,6 +83,11 @@ func newTestHandler(t *testing.T, db *sql.DB) *TestHandler {
 	r.Use(middleware.LoggingMiddleware("pamawas-ingest"))
 	r.Use(middleware.ErrorLoggingMiddleware("pamawas-ingest"))
 	r.Use(middleware.BodyLimitMiddleware(cfg.MaxBodyBytes))
+	r.Use(middleware.RateLimit("pamawas-ingest", map[string]middleware.RouteLimit{
+		"/api/v1/webhooks/grafana":          {RPS: cfg.WebhookRateLimitRPS, Burst: cfg.WebhookRateLimitBurst},
+		"/api/v1/webhooks/generic":          {RPS: cfg.WebhookRateLimitRPS, Burst: cfg.WebhookRateLimitBurst},
+		"/api/v1/retry-stalled-idempotency": {RPS: cfg.RateLimitRPS, Burst: cfg.RateLimitBurst},
+	}))
 
 	// V1 API endpoints
 	v1 := r.PathPrefix("/api/v1").Subrouter()
@@ -389,6 +394,10 @@ func TestGrafanaWebhook_Unauthorized(t *testing.T) {
 		WebhookToken:                   "test-token",
 		MaxBodyBytes:                   1048576,
 		TestMode:                       false,
+		RateLimitRPS:                   1000,
+		RateLimitBurst:                 2000,
+		WebhookRateLimitRPS:            1000,
+		WebhookRateLimitBurst:          2000,
 		CircuitBreakerFailureThreshold: 3,
 		CircuitBreakerResetTimeout:     30 * time.Second,
 	}
@@ -402,6 +411,11 @@ func TestGrafanaWebhook_Unauthorized(t *testing.T) {
 	r.Use(middleware.LoggingMiddleware("pamawas-ingest"))
 	r.Use(middleware.ErrorLoggingMiddleware("pamawas-ingest"))
 	r.Use(middleware.BodyLimitMiddleware(cfg.MaxBodyBytes))
+	r.Use(middleware.RateLimit("pamawas-ingest", map[string]middleware.RouteLimit{
+		"/api/v1/webhooks/grafana":          {RPS: cfg.WebhookRateLimitRPS, Burst: cfg.WebhookRateLimitBurst},
+		"/api/v1/webhooks/generic":          {RPS: cfg.WebhookRateLimitRPS, Burst: cfg.WebhookRateLimitBurst},
+		"/api/v1/retry-stalled-idempotency": {RPS: cfg.RateLimitRPS, Burst: cfg.RateLimitBurst},
+	}))
 
 	// V1 API endpoints
 	v1 := r.PathPrefix("/api/v1").Subrouter()

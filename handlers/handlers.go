@@ -27,7 +27,7 @@ type Handler struct {
 	db              *sql.DB
 	cfg             config.Config
 	metrics         *metrics.Metrics
-	resolveNotifier *service.ResolveNotifier
+	alertClient     *service.AlertClient
 	circuitBreakers map[string]*service.CircuitBreaker
 	cbMu            sync.Mutex
 }
@@ -43,7 +43,7 @@ func NewHandler(db *sql.DB, cfg config.Config, m *metrics.Metrics) *Handler {
 	h.circuitBreakers["database"] = service.NewCircuitBreaker(cfg.CircuitBreakerFailureThreshold, cfg.CircuitBreakerResetTimeout)
 
 	if cfg.ReporterURL != "" {
-		h.resolveNotifier = service.NewResolveNotifier(cfg.ReporterURL, 10*time.Second, context.Background())
+		h.alertClient = service.NewAlertClient(cfg.ReporterURL, 10*time.Second, context.Background())
 	}
 	return h
 }
@@ -512,9 +512,11 @@ func (h *Handler) GrafanaWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Forward resolved event to reporter's /api/v1/resolve-notification for "alert solved" notifications.
-	if !duplicate && webhookReq.Status == "resolved" && h.resolveNotifier != nil {
-		h.ForwardResolvedEventToReporter(context.Background(), eventID, webhookReq)
+	// Forward event-driven alerts: a firing event triggers the immediate
+	// high-severity alert, a resolved event the alert-resolved message. The
+	// reporter owns severity gating and one-shot deduplication.
+	if !duplicate {
+		h.ForwardEventToReporter(context.Background(), eventID, webhookReq)
 	}
 
 	writeSuccessResponse(w, requestID, eventID, duplicate)
@@ -542,6 +544,11 @@ func (h *Handler) GenericWebhook(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		h.handleProcessEventError(w, requestID, err, idempotencyKey)
 		return
+	}
+
+	// Forward event-driven alerts (same semantics as the Grafana path).
+	if !duplicate {
+		h.ForwardEventToReporter(context.Background(), eventID, &req)
 	}
 
 	writeSuccessResponse(w, requestID, eventID, duplicate)
@@ -641,56 +648,79 @@ func (h *Handler) circuitBreakerFor() *service.CircuitBreaker {
 	return h.circuitBreakers["database"]
 }
 
-// resolveNotificationBackoff retries incident_events lookup when no incident is linked yet.
-var resolveNotificationBackoff = 10 * time.Second
+// alertLinkBackoff is the delay between retries when looking up the incident
+// an event belongs to. The reporter forwards live in the webhook handler
+// before correlation has run, so the incident_events link may not exist yet.
+var alertLinkBackoff = 10 * time.Second
 
-// ForwardResolvedEventToReporter forwards a resolve notification for the incident linked to the resolved event (fire-and-forget).
-func (h *Handler) ForwardResolvedEventToReporter(ctx context.Context, eventID string, webhookReq *models.WebhookRequest) {
-	go h.tryResolveNotification(eventID, webhookReq)
+// ForwardEventToReporter forwards an event-driven alert to the reporter for
+// the incident the event belongs to:
+//
+//   - firing   -> immediate high-severity alert (/api/v1/alerts)
+//   - resolved -> alert-resolved message (/api/v1/alerts/resolved)
+//
+// Fire-and-forget; the incident link may not exist yet (correlation runs
+// after ingest), so the lookup retries briefly. Severity gating and one-shot
+// deduplication are the reporter's job.
+func (h *Handler) ForwardEventToReporter(ctx context.Context, eventID string, webhookReq *models.WebhookRequest) {
+	if h.alertClient == nil {
+		return
+	}
+	var sendAsync func(payload service.AlertPayload)
+	switch webhookReq.Status {
+	case "firing":
+		sendAsync = h.alertClient.SendAlertAsync
+	case "resolved":
+		sendAsync = h.alertClient.SendResolveAlertAsync
+	default:
+		return
+	}
+	go h.tryForwardAlert(eventID, webhookReq, sendAsync)
 }
 
-// tryResolveNotification retries the incident_events lookup and sends the notification when found.
-func (h *Handler) tryResolveNotification(eventID string, webhookReq *models.WebhookRequest) {
+// tryForwardAlert resolves the incident link and dispatches the alert,
+// retrying briefly because correlation runs after ingest.
+func (h *Handler) tryForwardAlert(eventID string, webhookReq *models.WebhookRequest, sendAsync func(service.AlertPayload)) {
 	ctx := context.Background()
 
 	var incidentID string
 	err := h.db.QueryRowContext(ctx, `SELECT incident_id FROM incident_events WHERE event_id = $1 LIMIT 1`, eventID).Scan(&incidentID)
 	if err == nil {
-		h.sendResolveNotification(eventID, incidentID, webhookReq)
+		h.sendAlert(eventID, incidentID, webhookReq, sendAsync)
 		return
 	}
 	if err != sql.ErrNoRows {
-		log.Error().Err(err).Str("event_id", eventID).Msg("Error looking up incident for resolved event; skipping resolve notification")
+		log.Error().Err(err).Str("event_id", eventID).Msg("Error looking up incident for event; skipping alert forward")
 		return
 	}
 
-	log.Debug().Str("event_id", eventID).Msg("No incident linked to resolved event yet; retrying")
+	log.Debug().Str("event_id", eventID).Msg("No incident linked to event yet; retrying")
 	for i := 0; i < 3; i++ {
 		select {
 		case <-ctx.Done():
-			log.Warn().Str("event_id", eventID).Msg("Context cancelled while waiting for incident link; skipping resolve notification")
+			log.Warn().Str("event_id", eventID).Msg("Context cancelled while waiting for incident link; skipping alert forward")
 			return
-		case <-time.After(resolveNotificationBackoff):
+		case <-time.After(alertLinkBackoff):
 		}
 
 		err = h.db.QueryRowContext(ctx, `SELECT incident_id FROM incident_events WHERE event_id = $1 LIMIT 1`, eventID).Scan(&incidentID)
 		if err == nil {
-			h.sendResolveNotification(eventID, incidentID, webhookReq)
+			h.sendAlert(eventID, incidentID, webhookReq, sendAsync)
 			return
 		}
 		if err != sql.ErrNoRows {
-			log.Error().Err(err).Str("event_id", eventID).Msg("Error looking up incident for resolved event; skipping resolve notification")
+			log.Error().Err(err).Str("event_id", eventID).Msg("Error looking up incident for event; skipping alert forward")
 			return
 		}
-		log.Debug().Str("event_id", eventID).Msg("Still no incident linked to resolved event; retrying")
+		log.Debug().Str("event_id", eventID).Msg("Still no incident linked to event; retrying")
 	}
 
-	log.Warn().Str("event_id", eventID).Msg("No incident linked to resolved event after retries; skipping resolve notification")
+	log.Warn().Str("event_id", eventID).Msg("No incident linked to event after retries; skipping alert forward")
 }
 
-// sendResolveNotification forwards a resolve notification for the linked incident; fire-and-forget.
-func (h *Handler) sendResolveNotification(eventID, incidentID string, webhookReq *models.WebhookRequest) {
-	payload := service.ResolveNotificationPayload{
+// sendAlert builds the alert payload and dispatches it fire-and-forget.
+func (h *Handler) sendAlert(eventID, incidentID string, webhookReq *models.WebhookRequest, sendAsync func(service.AlertPayload)) {
+	payload := service.AlertPayload{
 		IncidentID:      incidentID,
 		RequestID:       webhookReq.SourceEventID,
 		ContractVersion: 1,
@@ -699,8 +729,12 @@ func (h *Handler) sendResolveNotification(eventID, incidentID string, webhookReq
 		payload.RequestID = eventID
 	}
 
-	h.resolveNotifier.SendResolveNotificationAsync(payload)
-	log.Info().Str("event_id", eventID).Str("incident_id", incidentID).Msg("Resolve notification forwarded to reporter")
+	sendAsync(payload)
+	log.Info().
+		Str("event_id", eventID).
+		Str("incident_id", incidentID).
+		Str("status", webhookReq.Status).
+		Msg("Alert forwarded to reporter")
 }
 
 // RecoverStalledIdempotencyHandler reclaims idempotency records stuck in "processing" past expiration.
