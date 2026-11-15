@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/spf13/viper"
@@ -29,6 +30,12 @@ type Config struct {
 	// centralized; was hard-coded 3 / 30s in handlers).
 	CircuitBreakerFailureThreshold int
 	CircuitBreakerResetTimeout     time.Duration
+
+	// Minimum severity that triggers an event-driven alert forward to the
+	// reporter (default "high" => high/critical). Mirrors the reporter's
+	// HIGH_SEVERITY_THRESHOLD so ingest does not forward low-severity events;
+	// the reporter re-checks the same threshold authoritatively.
+	HighSeverityThreshold string
 }
 
 func Load() Config {
@@ -82,6 +89,9 @@ func Load() Config {
 	if err := v.BindEnv("circuit_breaker_reset_timeout", "CIRCUIT_BREAKER_RESET_TIMEOUT"); err != nil {
 		panic(fmt.Sprintf("failed to bind CIRCUIT_BREAKER_RESET_TIMEOUT env: %v", err))
 	}
+	if err := v.BindEnv("high_severity_threshold", "HIGH_SEVERITY_THRESHOLD", "PAMAWAS_INGEST_HIGH_SEVERITY_THRESHOLD"); err != nil {
+		panic(fmt.Sprintf("failed to bind HIGH_SEVERITY_THRESHOLD env: %v", err))
+	}
 
 	// Defaults
 	v.SetDefault("port", "8080")
@@ -96,6 +106,7 @@ func Load() Config {
 	v.SetDefault("webhook_rate_limit_burst", 100)
 	v.SetDefault("circuit_breaker_failure_threshold", 3)
 	v.SetDefault("circuit_breaker_reset_timeout", "30s")
+	v.SetDefault("high_severity_threshold", "high")
 
 	if err := v.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
@@ -119,6 +130,7 @@ func Load() Config {
 		WebhookRateLimitBurst:          v.GetInt("webhook_rate_limit_burst"),
 		CircuitBreakerFailureThreshold: v.GetInt("circuit_breaker_failure_threshold"),
 		CircuitBreakerResetTimeout:     v.GetDuration("circuit_breaker_reset_timeout"),
+		HighSeverityThreshold:          v.GetString("high_severity_threshold"),
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -157,6 +169,11 @@ func (c Config) Validate() error {
 	}
 	if c.CircuitBreakerResetTimeout <= 0 {
 		return fmt.Errorf("circuit_breaker_reset_timeout must be > 0, got %s", c.CircuitBreakerResetTimeout)
+	}
+	switch strings.ToLower(c.HighSeverityThreshold) {
+	case "debug", "info", "warning", "high", "critical":
+	default:
+		return fmt.Errorf("high_severity_threshold must be one of debug|info|warning|high|critical, got %q", c.HighSeverityThreshold)
 	}
 	return nil
 }

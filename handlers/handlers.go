@@ -653,17 +653,48 @@ func (h *Handler) circuitBreakerFor() *service.CircuitBreaker {
 // before correlation has run, so the incident_events link may not exist yet.
 var alertLinkBackoff = 10 * time.Second
 
+// severityRank maps a severity to its ordering (matches the reporter and
+// scheduler). Unknown severities rank 0, below every valid level.
+func severityRank(severity string) int {
+	switch strings.ToLower(severity) {
+	case "debug":
+		return 1
+	case "info":
+		return 2
+	case "warning":
+		return 3
+	case "high":
+		return 4
+	case "critical":
+		return 5
+	default:
+		return 0
+	}
+}
+
 // ForwardEventToReporter forwards an event-driven alert to the reporter for
 // the incident the event belongs to:
 //
 //   - firing   -> immediate high-severity alert (/api/v1/alerts)
 //   - resolved -> alert-resolved message (/api/v1/alerts/resolved)
 //
+// Only events at or above the configured HIGH_SEVERITY_THRESHOLD are
+// forwarded (default "high" => high/critical); the reporter re-checks the
+// same threshold authoritatively, so a misconfiguration here never causes an
+// out-of-policy alert.
+//
 // Fire-and-forget; the incident link may not exist yet (correlation runs
-// after ingest), so the lookup retries briefly. Severity gating and one-shot
-// deduplication are the reporter's job.
+// after ingest), so the lookup retries briefly.
 func (h *Handler) ForwardEventToReporter(ctx context.Context, eventID string, webhookReq *models.WebhookRequest) {
 	if h.alertClient == nil {
+		return
+	}
+	if severityRank(webhookReq.Severity) < severityRank(h.cfg.HighSeverityThreshold) {
+		log.Debug().
+			Str("event_id", eventID).
+			Str("severity", webhookReq.Severity).
+			Str("threshold", h.cfg.HighSeverityThreshold).
+			Msg("Event severity below threshold; skipping alert forward")
 		return
 	}
 	var sendAsync func(payload service.AlertPayload)
