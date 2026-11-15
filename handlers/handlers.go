@@ -43,7 +43,7 @@ func NewHandler(db *sql.DB, cfg config.Config, m *metrics.Metrics) *Handler {
 	h.circuitBreakers["database"] = service.NewCircuitBreaker(cfg.CircuitBreakerFailureThreshold, cfg.CircuitBreakerResetTimeout)
 
 	if cfg.ReporterURL != "" {
-		h.alertClient = service.NewAlertClient(cfg.ReporterURL, 10*time.Second, context.Background())
+		h.alertClient = service.NewAlertClient(cfg.ReporterURL, cfg.ServiceToken, 10*time.Second, context.Background())
 	}
 	return h
 }

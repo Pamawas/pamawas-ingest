@@ -26,16 +26,20 @@ import (
 type AlertClient struct {
 	httpClient *http.Client
 	baseURL    string
-	wg         sync.WaitGroup
-	ctx        context.Context
+	// serviceToken authenticates to the reporter, which rejects unauthenticated
+	// callers on every /api/v1 route.
+	serviceToken string
+	wg           sync.WaitGroup
+	ctx          context.Context
 }
 
 // NewAlertClient creates an AlertClient posting to baseURL.
-func NewAlertClient(baseURL string, timeout time.Duration, ctx context.Context) *AlertClient {
+func NewAlertClient(baseURL, serviceToken string, timeout time.Duration, ctx context.Context) *AlertClient {
 	return &AlertClient{
-		httpClient: &http.Client{Timeout: timeout},
-		baseURL:    strings.TrimRight(baseURL, "/"),
-		ctx:        ctx,
+		httpClient:   &http.Client{Timeout: timeout},
+		baseURL:      strings.TrimRight(baseURL, "/"),
+		serviceToken: serviceToken,
+		ctx:          ctx,
 	}
 }
 
@@ -92,6 +96,9 @@ func (n *AlertClient) post(ctx context.Context, path string, payload AlertPayloa
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if n.serviceToken != "" {
+		req.Header.Set("X-Service-Token", n.serviceToken)
+	}
 
 	resp, err := n.httpClient.Do(req)
 	if err != nil {

@@ -14,6 +14,9 @@ type Config struct {
 	LogLevel     string
 	Environment  string
 	WebhookToken string
+	// ServiceToken authenticates outbound calls to the reporter, which requires
+	// it on every /api/v1 route.
+	ServiceToken string
 	MaxBodyBytes int64
 	TestMode     bool
 	ReporterURL  string
@@ -68,6 +71,9 @@ func Load() Config {
 	if err := v.BindEnv("test_mode", "TEST_MODE", "PAMAWAS_INGEST_TEST_MODE"); err != nil {
 		panic(fmt.Sprintf("failed to bind TEST_MODE env: %v", err))
 	}
+	if err := v.BindEnv("service_token", "PAMAWAS_SERVICE_TOKEN"); err != nil {
+		panic(fmt.Sprintf("failed to bind PAMAWAS_SERVICE_TOKEN env: %v", err))
+	}
 	if err := v.BindEnv("reporter_url", "REPORTER_URL", "PAMAWAS_INGEST_REPORTER_URL"); err != nil {
 		panic(fmt.Sprintf("failed to bind REPORTER_URL env: %v", err))
 	}
@@ -121,6 +127,7 @@ func Load() Config {
 		LogLevel:                       v.GetString("log_level"),
 		Environment:                    v.GetString("environment"),
 		WebhookToken:                   v.GetString("webhook_token"),
+		ServiceToken:                   v.GetString("service_token"),
 		MaxBodyBytes:                   v.GetInt64("max_body_bytes"),
 		TestMode:                       v.GetBool("test_mode"),
 		ReporterURL:                    v.GetString("reporter_url"),
@@ -163,6 +170,9 @@ func (c Config) Validate() error {
 	}
 	if !c.TestMode && c.WebhookToken == "" {
 		return fmt.Errorf("webhook_token is required outside test mode (set PAMAWAS_WEBHOOK_TOKEN or enable TEST_MODE)")
+	}
+	if !c.TestMode && c.ServiceToken == "" {
+		return fmt.Errorf("service_token is required outside test mode (set PAMAWAS_SERVICE_TOKEN): the reporter rejects unauthenticated callers")
 	}
 	if c.CircuitBreakerFailureThreshold < 1 {
 		return fmt.Errorf("circuit_breaker_failure_threshold must be >= 1, got %d", c.CircuitBreakerFailureThreshold)
