@@ -119,6 +119,13 @@ func newRouter(h *handlers.Handler, cfg config.Config) *mux.Router {
 	r.Use(middleware.LoggingMiddleware("pamawas-ingest"))
 	r.Use(middleware.ErrorLoggingMiddleware("pamawas-ingest"))
 	r.Use(middleware.BodyLimitMiddleware(cfg.MaxBodyBytes))
+	// Rate limiting runs before authentication so flooded requests are
+	// rejected without spending token comparison or DB work (design review P5).
+	r.Use(middleware.RateLimit("pamawas-ingest", map[string]middleware.RouteLimit{
+		"/api/v1/webhooks/grafana":          {RPS: cfg.WebhookRateLimitRPS, Burst: cfg.WebhookRateLimitBurst},
+		"/api/v1/webhooks/generic":          {RPS: cfg.WebhookRateLimitRPS, Burst: cfg.WebhookRateLimitBurst},
+		"/api/v1/retry-stalled-idempotency": {RPS: cfg.RateLimitRPS, Burst: cfg.RateLimitBurst},
+	}))
 
 	apiV1 := r.PathPrefix("/api/v1").Subrouter()
 	apiV1.HandleFunc("/webhooks/grafana", h.GrafanaWebhook).Methods("POST")

@@ -15,6 +15,14 @@ type Config struct {
 	MaxBodyBytes int64
 	TestMode     bool
 	ReporterURL  string
+
+	// Inbound HTTP rate limiting (design review P5). Applies per route;
+	// /healthz, /ready and /metrics are exempt. Webhook routes carry their
+	// own (higher) budget because alert floods are the expected load shape.
+	RateLimitRPS          float64
+	RateLimitBurst        int
+	WebhookRateLimitRPS   float64
+	WebhookRateLimitBurst int
 }
 
 func Load() Config {
@@ -50,6 +58,18 @@ func Load() Config {
 	if err := v.BindEnv("reporter_url", "REPORTER_URL", "PAMAWAS_INGEST_REPORTER_URL"); err != nil {
 		panic(fmt.Sprintf("failed to bind REPORTER_URL env: %v", err))
 	}
+	if err := v.BindEnv("rate_limit_rps", "RATE_LIMIT_RPS"); err != nil {
+		panic(fmt.Sprintf("failed to bind RATE_LIMIT_RPS env: %v", err))
+	}
+	if err := v.BindEnv("rate_limit_burst", "RATE_LIMIT_BURST"); err != nil {
+		panic(fmt.Sprintf("failed to bind RATE_LIMIT_BURST env: %v", err))
+	}
+	if err := v.BindEnv("webhook_rate_limit_rps", "WEBHOOK_RATE_LIMIT_RPS"); err != nil {
+		panic(fmt.Sprintf("failed to bind WEBHOOK_RATE_LIMIT_RPS env: %v", err))
+	}
+	if err := v.BindEnv("webhook_rate_limit_burst", "WEBHOOK_RATE_LIMIT_BURST"); err != nil {
+		panic(fmt.Sprintf("failed to bind WEBHOOK_RATE_LIMIT_BURST env: %v", err))
+	}
 
 	// Defaults
 	v.SetDefault("port", "8080")
@@ -58,6 +78,10 @@ func Load() Config {
 	v.SetDefault("environment", "development")
 	v.SetDefault("max_body_bytes", 1048576) // 1 MiB
 	v.SetDefault("test_mode", false)
+	v.SetDefault("rate_limit_rps", 10)
+	v.SetDefault("rate_limit_burst", 20)
+	v.SetDefault("webhook_rate_limit_rps", 50)
+	v.SetDefault("webhook_rate_limit_burst", 100)
 
 	if err := v.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
@@ -67,14 +91,18 @@ func Load() Config {
 	}
 
 	cfg := Config{
-		DatabaseURL:  v.GetString("database_url"),
-		Port:         v.GetString("port"),
-		LogLevel:     v.GetString("log_level"),
-		Environment:  v.GetString("environment"),
-		WebhookToken: v.GetString("webhook_token"),
-		MaxBodyBytes: v.GetInt64("max_body_bytes"),
-		TestMode:     v.GetBool("test_mode"),
-		ReporterURL:  v.GetString("reporter_url"),
+		DatabaseURL:           v.GetString("database_url"),
+		Port:                  v.GetString("port"),
+		LogLevel:              v.GetString("log_level"),
+		Environment:           v.GetString("environment"),
+		WebhookToken:          v.GetString("webhook_token"),
+		MaxBodyBytes:          v.GetInt64("max_body_bytes"),
+		TestMode:              v.GetBool("test_mode"),
+		ReporterURL:           v.GetString("reporter_url"),
+		RateLimitRPS:          v.GetFloat64("rate_limit_rps"),
+		RateLimitBurst:        v.GetInt("rate_limit_burst"),
+		WebhookRateLimitRPS:   v.GetFloat64("webhook_rate_limit_rps"),
+		WebhookRateLimitBurst: v.GetInt("webhook_rate_limit_burst"),
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -92,6 +120,18 @@ func (c Config) Validate() error {
 	}
 	if c.MaxBodyBytes <= 0 {
 		return fmt.Errorf("max_body_bytes must be positive")
+	}
+	if c.RateLimitRPS <= 0 {
+		return fmt.Errorf("rate_limit_rps must be positive")
+	}
+	if c.RateLimitBurst < 1 {
+		return fmt.Errorf("rate_limit_burst must be >= 1")
+	}
+	if c.WebhookRateLimitRPS <= 0 {
+		return fmt.Errorf("webhook_rate_limit_rps must be positive")
+	}
+	if c.WebhookRateLimitBurst < 1 {
+		return fmt.Errorf("webhook_rate_limit_burst must be >= 1")
 	}
 	if !c.TestMode && c.WebhookToken == "" {
 		return fmt.Errorf("webhook_token is required outside test mode (set PAMAWAS_WEBHOOK_TOKEN or enable TEST_MODE)")
