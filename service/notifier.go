@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 )
 
 // AlertClient forwards alert lifecycle messages to the reporter, which owns
@@ -95,6 +97,9 @@ func (n *AlertClient) post(ctx context.Context, path string, payload AlertPayloa
 	if err != nil {
 		return nil, err
 	}
+	// Carry the trace so the reporter's span joins the webhook's trace rather
+	// than starting a disconnected one.
+	otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(req.Header))
 	req.Header.Set("Content-Type", "application/json")
 	if n.serviceToken != "" {
 		req.Header.Set("X-Service-Token", n.serviceToken)

@@ -116,6 +116,7 @@ func main() {
 
 func newRouter(h *handlers.Handler, cfg config.Config) *mux.Router {
 	r := mux.NewRouter()
+	r.Use(middleware.Tracing("pamawas-ingest"))
 	r.Use(middleware.LoggingMiddleware("pamawas-ingest"))
 	r.Use(middleware.ErrorLoggingMiddleware("pamawas-ingest"))
 	r.Use(middleware.BodyLimitMiddleware(cfg.MaxBodyBytes))
