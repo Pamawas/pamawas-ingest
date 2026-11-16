@@ -81,3 +81,19 @@ func TestParseGrafanaPayloadResolutionTimeAndFingerprint(t *testing.T) {
 		t.Fatalf("Grafana fingerprint label = %q, want stable alert fingerprint", req.Labels["grafana_fingerprint"])
 	}
 }
+
+// TestUnknownThresholdRanksBelowEverySeverity pins the gate's floor.
+//
+// HIGH_SEVERITY_THRESHOLD=unknown means "no gate": it must rank below debug so
+// that an event with no severity at all (rank 0) still passes the comparison
+// `severityRank(event) >= severityRank(threshold)`.
+func TestUnknownThresholdRanksBelowEverySeverity(t *testing.T) {
+	if got := severityRank("unknown"); got != 0 {
+		t.Fatalf("severityRank(unknown) = %d, want 0", got)
+	}
+	for _, severity := range []string{"", "debug", "info", "warning", "high", "critical"} {
+		if severityRank(severity) < severityRank("unknown") {
+			t.Errorf("severity %q would be filtered by the unknown threshold", severity)
+		}
+	}
+}
