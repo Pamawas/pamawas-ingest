@@ -35,7 +35,7 @@ func TracingMiddleware(serviceName string, next http.Handler) http.Handler {
 // `mux.MiddlewareFunc` (a func(http.Handler) http.Handler).
 func Tracing(serviceName string) mux.MiddlewareFunc {
 	tracer := otel.Tracer(serviceName)
-	propagator := otel.GetTextMapPropagator()
+	propagator := traceContextPropagator()
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
