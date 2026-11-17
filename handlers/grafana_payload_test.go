@@ -1,6 +1,10 @@
 package handlers
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/Pamawas/pamawas-ingest/models"
+)
 
 func TestParseGrafanaPayloadStatus(t *testing.T) {
 	tests := []struct {
@@ -96,4 +100,82 @@ func TestUnknownThresholdRanksBelowEverySeverity(t *testing.T) {
 			t.Errorf("severity %q would be filtered by the unknown threshold", severity)
 		}
 	}
+}
+
+// TestTargetAndServiceResolveFromWhateverLabelsTheRuleHas covers the real
+// label shapes in production.
+//
+// Alert rules are written by hand against several data sources, so there is no
+// single label that names the affected entity. Reading only service/instance/job
+// left pod-scoped alerts with no entity at all, and the report card read
+// "Pod Crash Looping on unknown".
+func TestTargetAndServiceResolveFromWhateverLabelsTheRuleHas(t *testing.T) {
+	tests := []struct {
+		name        string
+		tags        map[string]interface{}
+		wantTarget  string
+		wantService string
+	}{
+		{
+			name:        "scrape target",
+			tags:        map[string]interface{}{"instance": "koba-labs", "job": "docker_cadvisor", "cluster": "docker_cluster"},
+			wantTarget:  "koba-labs",
+			wantService: "docker_cadvisor",
+		},
+		{
+			name:        "ceph daemon",
+			tags:        map[string]interface{}{"instance": "ceph-1", "job": "ceph", "ceph_daemon": "osd.3"},
+			wantTarget:  "ceph-1",
+			wantService: "ceph",
+		},
+		{
+			// The shape that produced "on unknown": no instance, no job.
+			name:        "pod scoped",
+			tags:        map[string]interface{}{"pod": "pamawas-ingest-869ffc8f75-bkhvq", "namespace": "pamawas"},
+			wantTarget:  "pamawas-ingest-869ffc8f75-bkhvq",
+			wantService: "pamawas",
+		},
+		{
+			// A kube alert that also carries an app label prefers the app as
+			// the owner: it is the name that appears in metrics and logs.
+			name: "pod with app",
+			tags: map[string]interface{}{
+				"app": "pamawas-ingest", "pod": "pamawas-ingest-869ffc8f75-bkhvq",
+				"namespace": "pamawas", "instance": "10.41.34.63:8080", "job": "pamawas",
+			},
+			wantTarget:  "10.41.34.63:8080",
+			wantService: "pamawas-ingest",
+		},
+		{
+			name:        "explicit service wins",
+			tags:        map[string]interface{}{"service": "payment-api", "instance": "10.0.0.4"},
+			wantTarget:  "10.0.0.4",
+			wantService: "payment-api",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := (&models.GrafanaWebhookRequest{
+				RuleName: "Rule",
+				Tags:     toTags(tt.tags),
+			}).ToWebhookRequest()
+			if req.Target != tt.wantTarget {
+				t.Errorf("target = %q, want %q", req.Target, tt.wantTarget)
+			}
+			if req.Service != tt.wantService {
+				t.Errorf("service = %q, want %q", req.Service, tt.wantService)
+			}
+		})
+	}
+}
+
+func toTags(in map[string]interface{}) map[string]string {
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		if s, ok := v.(string); ok {
+			out[k] = s
+		}
+	}
+	return out
 }

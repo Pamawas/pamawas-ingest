@@ -2,6 +2,7 @@ package models
 
 import (
 	"encoding/json"
+	"sort"
 	"strings"
 	"time"
 )
@@ -27,11 +28,11 @@ type CommonEvent struct {
 
 // WebhookRequest represents the v1 generic webhook request
 type WebhookRequest struct {
-	SchemaVersion int                    `json:"schema_version"`
-	SourceEventID string                 `json:"source_event_id,omitempty"`
-	Type          string                 `json:"type"`
-	OccurredAt    string                 `json:"occurred_at"`
-	Service       string                 `json:"service"`
+	SchemaVersion int    `json:"schema_version"`
+	SourceEventID string `json:"source_event_id,omitempty"`
+	Type          string `json:"type"`
+	OccurredAt    string `json:"occurred_at"`
+	Service       string `json:"service"`
 	// The concrete entity the alert is about (Grafana: the `instance` label,
 	// falling back to `job`). This is what tells a human what is down; a
 	// Grafana alert's default payload names no service at all.
@@ -39,12 +40,12 @@ type WebhookRequest struct {
 	// The scrape job that produced the alert (Grafana: the `job` label).
 	Job string `json:"job,omitempty"`
 
-	Environment   string                 `json:"environment"`
-	Severity      string                 `json:"severity,omitempty"`
-	Title         string                 `json:"title,omitempty"`
-	Status        string                 `json:"status,omitempty"`
-	Labels        map[string]string      `json:"labels,omitempty"`
-	RawPayload    map[string]interface{} `json:"raw_payload,omitempty"`
+	Environment string                 `json:"environment"`
+	Severity    string                 `json:"severity,omitempty"`
+	Title       string                 `json:"title,omitempty"`
+	Status      string                 `json:"status,omitempty"`
+	Labels      map[string]string      `json:"labels,omitempty"`
+	RawPayload  map[string]interface{} `json:"raw_payload,omitempty"`
 }
 
 // WebhookResponse represents the response to webhook requests
@@ -228,6 +229,103 @@ type EvalMatch struct {
 	Metric map[string]string `json:"metric,omitempty"`
 }
 
+// metaLabels describe the alert, not the thing it is about. They are never the
+// entity: "grafana_folder=Services" says where the rule is filed, and
+// "send_to_pamawas=true" is routing.
+var metaLabels = map[string]struct{}{
+	"alertname":           {},
+	"rulename":            {},
+	"rule_uid":            {},
+	"ruleuid":             {},
+	"grafana_folder":      {},
+	"send_to_pamawas":     {},
+	"severity":            {},
+	"__name__":            {},
+	"fingerprint":         {},
+	"grafana_fingerprint": {},
+	"orgid":               {},
+	"receiver":            {},
+	"state":               {},
+	"status":              {},
+	"datasource":          {},
+	"datasource_uid":      {},
+	"panel":               {},
+	"dashboard":           {},
+	"team":                {},
+	"contactpoint":        {},
+	"group":               {},
+	"version":             {},
+}
+
+// entityLabels are the label names that name what is broken, most specific
+// first. Each tier lists the spellings in use across exporters, so the choice
+// follows the semantics rather than one deployment's naming.
+var entityLabels = [][]string{
+	// A concrete endpoint or host.
+	{"instance", "endpoint", "target", "address", "hostname", "host", "fqdn", "node", "server", "ip"},
+	// A resource inside a host.
+	{
+		"pod", "container", "container_name", "ceph_daemon", "daemon", "process",
+		"device", "disk", "mountpoint", "volume", "interface", "queue", "topic",
+		"shard", "index", "table", "database", "db", "unit", "service_unit",
+		"worker", "replica", "pool",
+	},
+	// A URL, when the rule monitors an HTTP endpoint.
+	{"url", "uri", "route", "path"},
+}
+
+// ownerLabels name the logical owner of the thing that is broken. These are the
+// names Prometheus and Loki actually carry, so they are the better query key.
+//
+// `cluster` is deliberately absent: it is grouping context, not an owner. It
+// sat above `job` in the tier list, so a scrape-target alert resolved its
+// service to "docker_cluster" and the report read "Services: docker_cluster"
+// about a docker_cadvisor target.
+var ownerLabels = [][]string{
+	{"service", "service_name", "app", "app_kubernetes_io_name", "application", "component", "workload"},
+	{"namespace", "environment", "env", "project", "site", "region", "zone"},
+	{"job"},
+}
+
+// jobLabels name the scrape job, for the report's Job line.
+var jobLabels = [][]string{{"job"}, {"namespace"}}
+
+// firstLabelValue returns the value of the first label in the tiers that is
+// present and non-empty. Tiers are tried in order, so a concrete endpoint beats
+// a resource inside it, which beats a URL.
+func firstLabelValue(tags map[string]string, tiers [][]string) string {
+	for _, tier := range tiers {
+		for _, name := range tier {
+			if v := strings.TrimSpace(tags[name]); v != "" {
+				return v
+			}
+		}
+	}
+	return ""
+}
+
+// describeLabels renders whatever labels the rule does carry, excluding the
+// alert's own plumbing. It is the last resort for a rule whose labels match no
+// known tier: a real label set is a better entity than an empty one.
+func describeLabels(tags map[string]string) string {
+	keys := make([]string, 0, len(tags))
+	for k, v := range tags {
+		if _, meta := metaLabels[k]; meta || strings.TrimSpace(v) == "" {
+			continue
+		}
+		keys = append(keys, k)
+	}
+	if len(keys) == 0 {
+		return ""
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, k+"="+tags[k])
+	}
+	return strings.Join(parts, ",")
+}
+
 // ToWebhookRequest converts a Grafana webhook to a normalized WebhookRequest
 func (g *GrafanaWebhookRequest) ToWebhookRequest() *WebhookRequest {
 	var occurredAt string
@@ -237,22 +335,40 @@ func (g *GrafanaWebhookRequest) ToWebhookRequest() *WebhookRequest {
 		occurredAt = g.EvalMatches[0].Time
 	}
 
-	// The monitored entity. Grafana's default alert payload has no `service`
-	// label at all — its labels name the target (`instance`) and the scrape
-	// job (`job`). Deriving the service from those is truthful; defaulting to
-	// the literal "grafana" was not, because that names the sender and made
-	// every alert read "Services: grafana", telling the reader nothing about
-	// what was actually down.
-	var service, target, job string
+	// The monitored entity.
+	//
+	// Alert rules are written by hand against many data sources, so there is no
+	// label that always names what is broken. Reading a fixed list of names
+	// left every rule outside that list with no entity at all, and the report
+	// card read "Pod Crash Looping on unknown".
+	//
+	// So the entity is derived rather than looked up: drop the labels that
+	// describe the alert itself, then pick from whatever is left. Two tiers do
+	// the picking, most specific first, each listing the spellings different
+	// exporters use. A label nobody anticipated still resolves, because the
+	// last resort is the remaining labels themselves, never the word "unknown".
+	var target, service, job string
 	if g.Tags != nil {
-		service = firstNonEmpty(g.Tags["service"], g.Tags["service_name"])
-		target = firstNonEmpty(g.Tags["instance"], g.Tags["job"])
-		job = g.Tags["job"]
+		target = firstLabelValue(g.Tags, entityLabels)
+		service = firstLabelValue(g.Tags, ownerLabels)
+		job = firstLabelValue(g.Tags, jobLabels)
+	}
+	// A rule that names only an owner (namespace, job) still has an entity: use
+	// it as the target rather than leaving the card without one.
+	if target == "" {
+		target = service
 	}
 	// Correlation and enrichment key on the affected entity: the service when
 	// the alert names one, otherwise the target it is about.
 	if service == "" {
 		service = target
+	}
+	if service == "" && len(g.Tags) > 0 {
+		// Nothing matched a known tier, but the rule does carry labels. Use the
+		// remaining ones so the entity is at least the real label set instead of
+		// an empty string.
+		service = describeLabels(g.Tags)
+		target = service
 	}
 
 	severity := "warning"
@@ -307,16 +423,6 @@ func (g *GrafanaWebhookRequest) ToWebhookRequest() *WebhookRequest {
 		Labels:        labels,
 		RawPayload:    g.RawPayload,
 	}
-}
-
-// firstNonEmpty returns the first non-empty value, or "" when none is set.
-func firstNonEmpty(values ...string) string {
-	for _, v := range values {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
 }
 
 // MarshalJSON implements custom JSON marshaling for WebhookRequest
