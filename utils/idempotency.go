@@ -40,16 +40,16 @@ func ComputeKeyHash(key string) string {
 // a different logical request.
 func ComputeRequestHash(req *models.WebhookRequest) (string, error) {
 	hashable := struct {
-		SchemaVersion int                    `json:"schema_version"`
-		SourceEventID string                 `json:"source_event_id,omitempty"`
-		Type          string                 `json:"type"`
-		OccurredAt    string                 `json:"occurred_at"`
-		Service       string                 `json:"service"`
-		Environment   string                 `json:"environment"`
-		Severity      string                 `json:"severity,omitempty"`
-		Title         string                 `json:"title,omitempty"`
-		Status        string                 `json:"status,omitempty"`
-		Labels        map[string]string      `json:"labels,omitempty"`
+		SchemaVersion int               `json:"schema_version"`
+		SourceEventID string            `json:"source_event_id,omitempty"`
+		Type          string            `json:"type"`
+		OccurredAt    string            `json:"occurred_at"`
+		Service       string            `json:"service"`
+		Environment   string            `json:"environment"`
+		Severity      string            `json:"severity,omitempty"`
+		Title         string            `json:"title,omitempty"`
+		Status        string            `json:"status,omitempty"`
+		Labels        map[string]string `json:"labels,omitempty"`
 	}{
 		SchemaVersion: req.SchemaVersion,
 		SourceEventID: req.SourceEventID,

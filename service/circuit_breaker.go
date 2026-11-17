@@ -29,9 +29,9 @@ type CircuitBreaker struct {
 // NewCircuitBreaker trips open after maxFailures consecutive failures, stays open for timeout, then allows a single trial call.
 func NewCircuitBreaker(maxFailures int, timeout time.Duration) *CircuitBreaker {
 	return &CircuitBreaker{
-		state:      CircuitStateClosed,
+		state:       CircuitStateClosed,
 		maxFailures: maxFailures,
-		timeout:    timeout,
+		timeout:     timeout,
 	}
 }
 
