@@ -33,6 +33,12 @@ jobs:
       uses: actions/checkout@v4
       with:
         repository: Pamawas/pamawas-schema
+        # Keep cross-repository migrations aligned with the branch being
+        # tested. Without this, actions/checkout selects schema's default
+        # branch (main), so dev builds can execute code that expects a newer
+        # column before the matching migration has been merged to main.
+        # Release tags deliberately use the stable schema main branch.
+        ref: ${{ github.event_name == 'pull_request' && github.base_ref || github.ref_type == 'branch' && github.ref_name || 'main' }}
         path: pamawas-schema
         sparse-checkout: |
           migrations
