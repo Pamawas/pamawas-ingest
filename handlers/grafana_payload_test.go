@@ -56,10 +56,7 @@ func TestParseGrafanaPayloadStatus(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			parsed, err := parseGrafanaPayload(tt.payload)
-			if err != nil {
-				t.Fatal(err)
-			}
+			parsed := parseGrafanaPayload(tt.payload)
 			got := parsed.ToWebhookRequest().Status
 			if got != tt.wantStatus {
 				t.Fatalf("status = %q, want %q", got, tt.wantStatus)
@@ -81,10 +78,7 @@ func TestParseGrafanaPayloadResolutionTimeAndFingerprint(t *testing.T) {
 		},
 	}
 
-	parsed, err := parseGrafanaPayload(payload)
-	if err != nil {
-		t.Fatal(err)
-	}
+	parsed := parseGrafanaPayload(payload)
 	req := parsed.ToWebhookRequest()
 	if req.OccurredAt != "2026-08-16T01:52:00Z" {
 		t.Fatalf("occurred at = %q, want resolved time", req.OccurredAt)
@@ -109,10 +103,7 @@ func TestParseGrafanaPayloadConditionReference(t *testing.T) {
 		},
 	}
 
-	parsed, err := parseGrafanaPayload(payload)
-	if err != nil {
-		t.Fatal(err)
-	}
+	parsed := parseGrafanaPayload(payload)
 	ref := parsed.ToWebhookRequest().ConditionRef
 	if ref == nil || ref.ResourceID != "rule-uid" || ref.InstanceID != "alert-fingerprint" {
 		t.Fatalf("condition reference = %#v", ref)
@@ -123,7 +114,7 @@ func TestParseGrafanaPayloadConditionReference(t *testing.T) {
 }
 
 func TestParseGrafanaPayloadConditionReferenceAcceptsSourceIdentityAliases(t *testing.T) {
-	parsed, err := parseGrafanaPayload(map[string]interface{}{
+	parsed := parseGrafanaPayload(map[string]interface{}{
 		"orgId": "7",
 		"alerts": []interface{}{
 			map[string]interface{}{
@@ -134,9 +125,6 @@ func TestParseGrafanaPayloadConditionReferenceAcceptsSourceIdentityAliases(t *te
 			},
 		},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	ref := parsed.ToWebhookRequest().ConditionRef
 	if ref == nil || ref.ResourceID != "rule-from-source-label" || ref.TenantID != "7" {
 		t.Fatalf("condition reference aliases = %#v", ref)
@@ -144,7 +132,7 @@ func TestParseGrafanaPayloadConditionReferenceAcceptsSourceIdentityAliases(t *te
 }
 
 func TestParseGrafanaPayloadMatchesGroupedConditionToNormalizedEvent(t *testing.T) {
-	parsed, err := parseGrafanaPayload(map[string]interface{}{
+	parsed := parseGrafanaPayload(map[string]interface{}{
 		"alerts": []interface{}{
 			map[string]interface{}{
 				"orgId": float64(1), "ruleUID": "rule-a", "fingerprint": "fp-a",
@@ -154,9 +142,6 @@ func TestParseGrafanaPayloadMatchesGroupedConditionToNormalizedEvent(t *testing.
 			},
 		},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	req := parsed.ToWebhookRequest()
 	if req.Labels["grafana_fingerprint"] != "fp-a" {
 		t.Fatalf("normalized fingerprint = %q, want fp-a", req.Labels["grafana_fingerprint"])

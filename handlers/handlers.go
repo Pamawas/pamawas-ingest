@@ -142,7 +142,7 @@ func (h *Handler) parseJSONBody(w http.ResponseWriter, requestID, endpoint strin
 }
 
 // parseGrafanaPayload converts raw Grafana payload to normalized request
-func parseGrafanaPayload(payload map[string]interface{}) (*models.GrafanaWebhookRequest, error) {
+func parseGrafanaPayload(payload map[string]interface{}) *models.GrafanaWebhookRequest {
 	grafanaReq := &models.GrafanaWebhookRequest{
 		RawPayload: payload,
 	}
@@ -160,7 +160,7 @@ func parseGrafanaPayload(payload map[string]interface{}) (*models.GrafanaWebhook
 	// Grafana adapter from current alert state.
 	extractGrafanaConditionReference(payload, grafanaReq)
 
-	return grafanaReq, nil
+	return grafanaReq
 }
 
 // extractCustomPayload extracts fields from Grafana 12+ custom payload format.
@@ -196,8 +196,10 @@ func grafanaConditionAlert(payload map[string]interface{}, fingerprint string) m
 		return payload
 	}
 	if len(alerts) == 1 {
-		alert, _ := alerts[0].(map[string]interface{})
-		return alert
+		if alert, ok := alerts[0].(map[string]interface{}); ok {
+			return alert
+		}
+		return nil
 	}
 	if strings.TrimSpace(fingerprint) == "" {
 		return nil
@@ -217,8 +219,10 @@ func grafanaConditionAlert(payload map[string]interface{}, fingerprint string) m
 }
 
 func stringValue(value interface{}) string {
-	text, _ := value.(string)
-	return text
+	if text, ok := value.(string); ok {
+		return text
+	}
+	return ""
 }
 
 func positiveInt(value interface{}) int {
@@ -627,7 +631,7 @@ func (h *Handler) GrafanaWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	grafanaReq, _ := parseGrafanaPayload(payload)
+	grafanaReq := parseGrafanaPayload(payload)
 	webhookReq := grafanaReq.ToWebhookRequest()
 
 	if !h.validateGrafanaRequest(w, requestID, endpoint, webhookReq) {
