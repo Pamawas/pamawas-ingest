@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -141,7 +142,7 @@ func (h *Handler) parseJSONBody(w http.ResponseWriter, requestID, endpoint strin
 }
 
 // parseGrafanaPayload converts raw Grafana payload to normalized request
-func parseGrafanaPayload(payload map[string]interface{}) *models.GrafanaWebhookRequest {
+func parseGrafanaPayload(payload map[string]interface{}) (*models.GrafanaWebhookRequest, error) {
 	grafanaReq := &models.GrafanaWebhookRequest{
 		RawPayload: payload,
 	}
@@ -152,7 +153,14 @@ func parseGrafanaPayload(payload map[string]interface{}) *models.GrafanaWebhookR
 	// Default payload fallback: extract from alerts array
 	extractFromAlerts(payload, grafanaReq)
 
-	return grafanaReq
+	// Capture only the source-owned condition identity. This runs after the
+	// normalizer has selected the alert instance represented by this event, so
+	// grouped notifications are matched by that exact fingerprint rather than
+	// guessed from alert order. Recovery semantics are evaluated later by the
+	// Grafana adapter from current alert state.
+	extractGrafanaConditionReference(payload, grafanaReq)
+
+	return grafanaReq, nil
 }
 
 // extractCustomPayload extracts fields from Grafana 12+ custom payload format.
@@ -176,6 +184,114 @@ func extractCustomPayload(payload map[string]interface{}, req *models.GrafanaWeb
 	}
 	if tags, ok := payload["tags"].(map[string]interface{}); ok {
 		req.Tags = parseTags(tags)
+	}
+	if fingerprint, ok := payload["fingerprint"].(string); ok {
+		req.Fingerprint = fingerprint
+	}
+}
+
+func grafanaConditionAlert(payload map[string]interface{}, fingerprint string) map[string]interface{} {
+	alerts, ok := payload["alerts"].([]interface{})
+	if !ok || len(alerts) == 0 {
+		return payload
+	}
+	if len(alerts) == 1 {
+		alert, _ := alerts[0].(map[string]interface{})
+		return alert
+	}
+	if strings.TrimSpace(fingerprint) == "" {
+		return nil
+	}
+	var selected map[string]interface{}
+	for _, raw := range alerts {
+		alert, ok := raw.(map[string]interface{})
+		if !ok || strings.TrimSpace(stringValue(alert["fingerprint"])) != strings.TrimSpace(fingerprint) {
+			continue
+		}
+		if selected != nil {
+			return nil
+		}
+		selected = alert
+	}
+	return selected
+}
+
+func stringValue(value interface{}) string {
+	text, _ := value.(string)
+	return text
+}
+
+func positiveInt(value interface{}) int {
+	switch typed := value.(type) {
+	case float64:
+		if typed > 0 && typed == float64(int(typed)) {
+			return int(typed)
+		}
+	case int:
+		if typed > 0 {
+			return typed
+		}
+	case string:
+		parsed, err := strconv.Atoi(strings.TrimSpace(typed))
+		if err == nil && parsed > 0 {
+			return parsed
+		}
+	case json.Number:
+		parsed, err := typed.Int64()
+		if err == nil && parsed > 0 {
+			return int(parsed)
+		}
+	}
+	return 0
+}
+
+func grafanaRuleUID(alert map[string]interface{}) string {
+	for _, key := range []string{"ruleUID", "ruleUid"} {
+		if value := strings.TrimSpace(stringValue(alert[key])); value != "" {
+			return value
+		}
+	}
+	if labels, ok := alert["labels"].(map[string]interface{}); ok {
+		return strings.TrimSpace(stringValue(labels["__alert_rule_uid__"]))
+	}
+	return ""
+}
+
+func extractGrafanaConditionReference(payload map[string]interface{}, req *models.GrafanaWebhookRequest) {
+	alert := grafanaConditionAlert(payload, req.Fingerprint)
+	if alert == nil {
+		return
+	}
+	ruleUID := grafanaRuleUID(alert)
+	fingerprint := strings.TrimSpace(stringValue(alert["fingerprint"]))
+	if fingerprint == "" {
+		fingerprint = strings.TrimSpace(req.Fingerprint)
+	}
+	orgID := positiveInt(alert["orgId"])
+	if orgID == 0 {
+		orgID = positiveInt(payload["orgId"])
+	}
+	if orgID == 0 {
+		return
+	}
+	labels := map[string]string{}
+	if rawLabels, ok := alert["labels"].(map[string]interface{}); ok {
+		labels = parseTags(rawLabels)
+	} else if rawTags, ok := payload["tags"].(map[string]interface{}); ok {
+		labels = parseTags(rawTags)
+	}
+	ref := &models.ConditionReference{
+		Version:      1,
+		Source:       "grafana",
+		Evaluator:    "managed_alerting",
+		ResourceType: "alert_rule",
+		ResourceID:   ruleUID,
+		InstanceID:   fingerprint,
+		TenantID:     strconv.Itoa(orgID),
+		Labels:       labels,
+	}
+	if len(models.ValidateConditionReference(ref)) == 0 {
+		req.ConditionRef = ref
 	}
 }
 
@@ -438,6 +554,15 @@ func (h *Handler) processEvent(ctx context.Context, requestID, source string, re
 		log.Error().Err(err).Str("event_id", eventID).Msg("Error marshaling raw payload")
 		return "", false, err
 	}
+	var conditionRefJSON []byte
+	if event.ConditionRef != nil {
+		conditionRefJSON, err = json.Marshal(event.ConditionRef)
+		if err != nil {
+			h.metrics.WebhookRequestsTotal.WithLabelValues(endpoint, "500").Inc()
+			log.Error().Err(err).Str("event_id", eventID).Msg("Error marshaling condition reference")
+			return "", false, err
+		}
+	}
 	var sourceEventID *string
 	if event.SourceEventID != "" {
 		sourceEventID = &event.SourceEventID
@@ -448,10 +573,10 @@ func (h *Handler) processEvent(ctx context.Context, requestID, source string, re
 	}
 
 	_, err = h.db.ExecContext(ctx,
-		`INSERT INTO events (id, source, source_event_id, fingerprint, type, occurred_at, service, environment, severity, title, status, labels, raw_payload, schema_version)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+		`INSERT INTO events (id, source, source_event_id, fingerprint, type, occurred_at, service, environment, severity, title, status, labels, raw_payload, condition_ref, schema_version)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
 		event.ID, event.Source, sourceEventID, fingerprintVal, event.Type, event.OccurredAt,
-		event.Service, event.Environment, event.Severity, event.Title, event.Status, labelsJSON, rawPayloadJSON, event.SchemaVersion,
+		event.Service, event.Environment, event.Severity, event.Title, event.Status, labelsJSON, rawPayloadJSON, conditionRefJSON, event.SchemaVersion,
 	)
 	h.metrics.DBWriteDuration.Observe(time.Since(dbStart).Seconds())
 
@@ -502,7 +627,7 @@ func (h *Handler) GrafanaWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	grafanaReq := parseGrafanaPayload(payload)
+	grafanaReq, _ := parseGrafanaPayload(payload)
 	webhookReq := grafanaReq.ToWebhookRequest()
 
 	if !h.validateGrafanaRequest(w, requestID, endpoint, webhookReq) {

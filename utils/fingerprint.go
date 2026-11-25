@@ -3,6 +3,7 @@ package utils
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"sort"
 	"strings"
 
@@ -33,6 +34,11 @@ func GenerateFingerprint(event *models.WebhookRequest) string {
 			parts = append(parts, k+"="+event.Labels[k])
 		}
 	}
+	if event.ConditionRef != nil {
+		if encoded, err := json.Marshal(event.ConditionRef); err == nil {
+			parts = append(parts, string(encoded))
+		}
+	}
 
 	data := strings.Join(parts, "|")
 	hash := sha256.Sum256([]byte(data))
@@ -60,6 +66,11 @@ func GenerateFingerprintFromCommon(event *models.CommonEvent) string {
 		sort.Strings(keys)
 		for _, k := range keys {
 			parts = append(parts, k+"="+event.Labels[k])
+		}
+	}
+	if event.ConditionRef != nil {
+		if encoded, err := json.Marshal(event.ConditionRef); err == nil {
+			parts = append(parts, string(encoded))
 		}
 	}
 

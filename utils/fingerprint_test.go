@@ -41,6 +41,19 @@ func TestGenerateFingerprint(t *testing.T) {
 	}
 	fp4 := GenerateFingerprint(&req3)
 	assert.Equal(t, fp1, fp4, "Label order should not affect fingerprint")
+
+	req4 := *req
+	req4.ConditionRef = &models.ConditionReference{
+		Version:      1,
+		Source:       "grafana",
+		Evaluator:    "managed_alerting",
+		ResourceType: "alert_rule",
+		ResourceID:   "payment-api-rule",
+		InstanceID:   "alert-fingerprint",
+		TenantID:     "1",
+		Labels:       map[string]string{"service": "payment-api"},
+	}
+	assert.NotEqual(t, fp1, GenerateFingerprint(&req4))
 }
 
 func TestGenerateFingerprintFromCommon(t *testing.T) {
@@ -94,6 +107,21 @@ func TestComputeRequestHash(t *testing.T) {
 	hash3, err := ComputeRequestHash(&req2)
 	assert.NoError(t, err)
 	assert.NotEqual(t, hash1, hash3)
+
+	req3 := *req
+	req3.ConditionRef = &models.ConditionReference{
+		Version:      1,
+		Source:       "grafana",
+		Evaluator:    "managed_alerting",
+		ResourceType: "alert_rule",
+		ResourceID:   "test-rule",
+		InstanceID:   "test-fingerprint",
+		TenantID:     "1",
+		Labels:       map[string]string{"service": "test"},
+	}
+	hash4, err := ComputeRequestHash(&req3)
+	assert.NoError(t, err)
+	assert.NotEqual(t, hash1, hash4)
 }
 
 func TestGenerateIdempotencyKey(t *testing.T) {

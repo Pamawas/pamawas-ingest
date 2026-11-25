@@ -34,6 +34,26 @@ func TestValidEventType(t *testing.T) {
 	assert.False(t, ValidEventType(""))
 }
 
+func TestValidateConditionReference(t *testing.T) {
+	valid := &ConditionReference{
+		Version:      1,
+		Source:       "grafana",
+		Evaluator:    "managed_alerting",
+		ResourceType: "alert_rule",
+		ResourceID:   "rule-uid",
+		InstanceID:   "alert-fingerprint",
+		TenantID:     "1",
+		Labels:       map[string]string{"service": "api"},
+	}
+	assert.Empty(t, ValidateConditionReference(valid))
+
+	invalid := *valid
+	invalid.InstanceID = ""
+	details := ValidateConditionReference(&invalid)
+	assert.Len(t, details, 1)
+	assert.Equal(t, "condition_ref.instance_id", details[0].Field)
+}
+
 func TestValidateWebhookRequest(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -324,6 +344,16 @@ func TestToCommonEvent(t *testing.T) {
 			"namespace":  "payments",
 			"alert_rule": "db_pool_exhaustion",
 		},
+		ConditionRef: &ConditionReference{
+			Version:      1,
+			Source:       "grafana",
+			Evaluator:    "managed_alerting",
+			ResourceType: "alert_rule",
+			ResourceID:   "payment-api-rule",
+			InstanceID:   "alert-fingerprint",
+			TenantID:     "1",
+			Labels:       map[string]string{"service": "payment-api"},
+		},
 	}
 
 	event := req.ToCommonEvent("grafana", "evt_123", "fp_abc")
@@ -341,6 +371,7 @@ func TestToCommonEvent(t *testing.T) {
 	assert.Equal(t, "firing", event.Status)
 	assert.Equal(t, 1, event.SchemaVersion)
 	assert.Equal(t, req.Labels, event.Labels)
+	assert.Equal(t, req.ConditionRef, event.ConditionRef)
 	assert.NotNil(t, event.OccurredAt)
 }
 
@@ -381,6 +412,16 @@ func TestGrafanaToWebhookRequest(t *testing.T) {
 		RawPayload: map[string]interface{}{
 			"ruleName": "High CPU Usage",
 		},
+		ConditionRef: &ConditionReference{
+			Version:      1,
+			Source:       "grafana",
+			Evaluator:    "managed_alerting",
+			ResourceType: "alert_rule",
+			ResourceID:   "payment-api-rule",
+			InstanceID:   "alert-fingerprint",
+			TenantID:     "1",
+			Labels:       map[string]string{"service": "payment-api"},
+		},
 	}
 
 	req := grafanaReq.ToWebhookRequest()
@@ -402,6 +443,7 @@ func TestGrafanaToWebhookRequest(t *testing.T) {
 	assert.False(t, hasService)
 	_, hasSeverity := req.Labels["severity"]
 	assert.False(t, hasSeverity)
+	assert.Equal(t, grafanaReq.ConditionRef, req.ConditionRef)
 }
 
 func TestGrafanaToWebhookRequest_EvalMatchTimestamp(t *testing.T) {

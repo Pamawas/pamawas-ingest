@@ -9,21 +9,22 @@ import (
 
 // CommonEvent represents the normalized event schema.
 type CommonEvent struct {
-	ID            string            `json:"id"`
-	Source        string            `json:"source"`
-	SourceEventID string            `json:"source_event_id,omitempty"`
-	Fingerprint   string            `json:"fingerprint,omitempty"`
-	Type          string            `json:"type"`
-	Timestamp     string            `json:"timestamp"` // ISO8601 string
-	OccurredAt    time.Time         `json:"-"`
-	Service       string            `json:"service,omitempty"`
-	Environment   string            `json:"environment,omitempty"`
-	Severity      string            `json:"severity,omitempty"`
-	Title         string            `json:"title,omitempty"`
-	Status        string            `json:"status,omitempty"`
-	Labels        map[string]string `json:"labels,omitempty"`
-	RawPayload    interface{}       `json:"raw_payload,omitempty"`
-	SchemaVersion int               `json:"schema_version,omitempty"`
+	ID            string              `json:"id"`
+	Source        string              `json:"source"`
+	SourceEventID string              `json:"source_event_id,omitempty"`
+	Fingerprint   string              `json:"fingerprint,omitempty"`
+	Type          string              `json:"type"`
+	Timestamp     string              `json:"timestamp"` // ISO8601 string
+	OccurredAt    time.Time           `json:"-"`
+	Service       string              `json:"service,omitempty"`
+	Environment   string              `json:"environment,omitempty"`
+	Severity      string              `json:"severity,omitempty"`
+	Title         string              `json:"title,omitempty"`
+	Status        string              `json:"status,omitempty"`
+	Labels        map[string]string   `json:"labels,omitempty"`
+	RawPayload    interface{}         `json:"raw_payload,omitempty"`
+	ConditionRef  *ConditionReference `json:"condition_ref,omitempty"`
+	SchemaVersion int                 `json:"schema_version,omitempty"`
 }
 
 // WebhookRequest represents the v1 generic webhook request
@@ -46,6 +47,23 @@ type WebhookRequest struct {
 	Status      string                 `json:"status,omitempty"`
 	Labels      map[string]string      `json:"labels,omitempty"`
 	RawPayload  map[string]interface{} `json:"raw_payload,omitempty"`
+	// ConditionRef is populated only by a trusted source normalizer. Generic
+	// webhook callers cannot supply it directly.
+	ConditionRef *ConditionReference `json:"-"`
+}
+
+// ConditionReference identifies one source-owned alert condition instance.
+// It contains identity only: no metric expression, threshold, title rule, or
+// incident-specific recovery logic can be injected through this contract.
+type ConditionReference struct {
+	Version      int               `json:"version"`
+	Source       string            `json:"source"`
+	Evaluator    string            `json:"evaluator"`
+	ResourceType string            `json:"resource_type"`
+	ResourceID   string            `json:"resource_id"`
+	InstanceID   string            `json:"instance_id"`
+	TenantID     string            `json:"tenant_id,omitempty"`
+	Labels       map[string]string `json:"labels"`
 }
 
 // WebhookResponse represents the response to webhook requests
@@ -119,6 +137,52 @@ func ValidEventType(s string) bool {
 	return s == "alert" || s == "event"
 }
 
+func containsControl(value string) bool {
+	return strings.IndexFunc(value, func(r rune) bool { return r < 32 || r == 127 }) >= 0
+}
+
+// ValidateConditionReference validates the source-owned condition identity.
+func ValidateConditionReference(ref *ConditionReference) []ErrorDetail {
+	if ref == nil {
+		return nil
+	}
+	var details []ErrorDetail
+	if ref.Version != 1 {
+		details = append(details, ErrorDetail{Field: "condition_ref.version", Reason: "must equal 1"})
+	}
+	if strings.TrimSpace(ref.Source) == "" || len(ref.Source) > 128 || containsControl(ref.Source) {
+		details = append(details, ErrorDetail{Field: "condition_ref.source", Reason: "required, bounded, and free of control characters"})
+	}
+	if strings.TrimSpace(ref.Evaluator) == "" || len(ref.Evaluator) > 128 || containsControl(ref.Evaluator) {
+		details = append(details, ErrorDetail{Field: "condition_ref.evaluator", Reason: "required, bounded, and free of control characters"})
+	}
+	if strings.TrimSpace(ref.ResourceType) == "" || len(ref.ResourceType) > 128 || containsControl(ref.ResourceType) {
+		details = append(details, ErrorDetail{Field: "condition_ref.resource_type", Reason: "required, bounded, and free of control characters"})
+	}
+	if strings.TrimSpace(ref.ResourceID) == "" || len(ref.ResourceID) > 256 || containsControl(ref.ResourceID) {
+		details = append(details, ErrorDetail{Field: "condition_ref.resource_id", Reason: "required, bounded, and free of control characters"})
+	}
+	if strings.TrimSpace(ref.InstanceID) == "" || len(ref.InstanceID) > 256 || containsControl(ref.InstanceID) {
+		details = append(details, ErrorDetail{Field: "condition_ref.instance_id", Reason: "required, bounded, and free of control characters"})
+	}
+	if len(ref.TenantID) > 128 || containsControl(ref.TenantID) {
+		details = append(details, ErrorDetail{Field: "condition_ref.tenant_id", Reason: "must be bounded and free of control characters"})
+	}
+	if len(ref.Labels) > 64 {
+		details = append(details, ErrorDetail{Field: "condition_ref.labels", Reason: "at most 64 labels"})
+	}
+	for key, value := range ref.Labels {
+		if strings.TrimSpace(key) == "" || len(key) > 128 || containsControl(key) {
+			details = append(details, ErrorDetail{Field: "condition_ref.labels", Reason: "label names must be non-empty, bounded, and free of control characters"})
+			break
+		}
+		if len(value) > 512 || containsControl(value) {
+			details = append(details, ErrorDetail{Field: "condition_ref.labels." + key, Reason: "value must be bounded and free of control characters"})
+		}
+	}
+	return details
+}
+
 // ValidateWebhookRequest validates a webhook request
 func ValidateWebhookRequest(req *WebhookRequest) []ErrorDetail {
 	var details []ErrorDetail
@@ -175,6 +239,7 @@ func ValidateWebhookRequest(req *WebhookRequest) []ErrorDetail {
 			details = append(details, ErrorDetail{Field: "labels." + k, Reason: "value at most 512 characters"})
 		}
 	}
+	details = append(details, ValidateConditionReference(req.ConditionRef)...)
 
 	return details
 }
@@ -207,19 +272,21 @@ func (r *WebhookRequest) ToCommonEvent(source string, eventID string, fingerprin
 		Status:        status,
 		Labels:        r.Labels,
 		RawPayload:    r.RawPayload,
+		ConditionRef:  r.ConditionRef,
 		SchemaVersion: r.SchemaVersion,
 	}
 }
 
 // GrafanaWebhookRequest represents the v1 grafana webhook request (adapted)
 type GrafanaWebhookRequest struct {
-	RuleName    string                 `json:"ruleName"`
-	Timestamp   string                 `json:"timestamp,omitempty"`
-	Status      string                 `json:"status,omitempty"`
-	Fingerprint string                 `json:"fingerprint,omitempty"`
-	EvalMatches []EvalMatch            `json:"evalMatches,omitempty"`
-	Tags        map[string]string      `json:"tags,omitempty"`
-	RawPayload  map[string]interface{} `json:"-"`
+	RuleName     string                 `json:"ruleName"`
+	Timestamp    string                 `json:"timestamp,omitempty"`
+	Status       string                 `json:"status,omitempty"`
+	Fingerprint  string                 `json:"fingerprint,omitempty"`
+	EvalMatches  []EvalMatch            `json:"evalMatches,omitempty"`
+	Tags         map[string]string      `json:"tags,omitempty"`
+	ConditionRef *ConditionReference    `json:"-"`
+	RawPayload   map[string]interface{} `json:"-"`
 }
 
 // EvalMatch represents a grafana eval match
@@ -422,6 +489,7 @@ func (g *GrafanaWebhookRequest) ToWebhookRequest() *WebhookRequest {
 		Status:        status,
 		Labels:        labels,
 		RawPayload:    g.RawPayload,
+		ConditionRef:  g.ConditionRef,
 	}
 }
 
